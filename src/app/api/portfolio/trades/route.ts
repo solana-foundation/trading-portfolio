@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { HeliusAuthError } from "@/lib/portfolio/helius";
+import { ProviderAuthError } from "@/lib/portfolio/helius";
 import {
   getAggregateTradePnL,
   getPortfolioHoldings,
@@ -66,8 +66,8 @@ export async function POST(request: Request) {
           : null,
     });
   } catch (e) {
-    if (e instanceof HeliusAuthError) {
-      console.error("portfolio: Helius auth failed:", e.message);
+    if (e instanceof ProviderAuthError) {
+      console.error("portfolio: provider auth failed:", e.message);
       return NextResponse.json(
         { error: "Upstream data provider unavailable." },
         { status: 502 },

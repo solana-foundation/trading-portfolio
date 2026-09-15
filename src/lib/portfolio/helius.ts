@@ -7,14 +7,98 @@ const DEFAULT_MAX_PAGES = 20;
 
 const txCache = new TtlCache<HeliusTx[]>(1_000, 60 * 60 * 1000);
 
-export class HeliusAuthError extends Error {
+export class ProviderAuthError extends Error {
   constructor(msg: string) {
     super(msg);
-    this.name = "HeliusAuthError";
+    this.name = "ProviderAuthError";
   }
 }
 
-type HeliusErrorResp = { error?: { code?: number; message?: string } };
+type ErrorResp = { error?: { code?: number; message?: string } };
+
+type TxProvider = {
+  name: string;
+  /** null when the provider is not configured for this environment. */
+  pageUrl: (wallet: string, before: string | null) => string | null;
+};
+
+// Ordered: first configured provider is primary, the rest are fallbacks.
+// ponytail: both providers must serve the Helius enhanced-transactions
+// response shape at /v0/addresses/{wallet}/transactions; add a per-provider
+// response adapter if a future backend diverges.
+const PROVIDERS: TxProvider[] = [
+  {
+    name: "helius",
+    pageUrl: (wallet, before) => {
+      const apiKey = process.env.HELIUS_API_KEY;
+      if (!apiKey) return null;
+      return (
+        `https://api.helius.xyz/v0/addresses/${wallet}/transactions` +
+        `?api-key=${apiKey}&limit=${PAGE_SIZE}` +
+        (before ? `&before=${before}` : "")
+      );
+    },
+  },
+  {
+    name: "triton",
+    pageUrl: (wallet, before) => {
+      const base = process.env.TRITON_API_URL; // e.g. https://<pool>.rpcpool.com/<token>
+      if (!base) return null;
+      return (
+        `${base.replace(/\/$/, "")}/v0/addresses/${wallet}/transactions` +
+        `?limit=${PAGE_SIZE}` +
+        (before ? `&before=${before}` : "")
+      );
+    },
+  },
+];
+
+function isAuthError(code: number | undefined, msg: string): boolean {
+  return (
+    code === -32401 || /invalid api key|unauthorized|forbidden/i.test(msg)
+  );
+}
+
+async function fetchFromProvider(
+  provider: TxProvider,
+  wallet: string,
+  maxPages: number,
+): Promise<HeliusTx[]> {
+  const all: HeliusTx[] = [];
+  let before: string | null = null;
+  for (let i = 0; i < maxPages; i++) {
+    const url = provider.pageUrl(wallet, before);
+    if (!url) throw new ProviderAuthError(`${provider.name} is not configured`);
+    let page: HeliusTx[] | ErrorResp;
+    try {
+      page = await fetchJSON(url);
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (/HTTP (401|403)/.test(msg)) {
+        throw new ProviderAuthError(`${provider.name}: ${msg}`);
+      }
+      throw new Error(
+        `${provider.name} fetch failed for ${wallet.slice(0, 4)}…: ${msg}`,
+      );
+    }
+    if (page && !Array.isArray(page) && (page as ErrorResp).error) {
+      const errResp = page as ErrorResp;
+      const msg = errResp.error?.message || JSON.stringify(errResp.error);
+      if (isAuthError(errResp.error?.code, msg)) {
+        throw new ProviderAuthError(`${provider.name}: ${msg}`);
+      }
+      throw new Error(
+        `${provider.name} API error for ${wallet.slice(0, 4)}…: ${msg}`,
+      );
+    }
+    if (!Array.isArray(page) || page.length === 0) break;
+    all.push(...page);
+    if (page.length < PAGE_SIZE) break;
+    before = page[page.length - 1]?.signature ?? null;
+    if (!before) break;
+  }
+  return all;
+}
 
 export async function fetchTransactions(
   wallet: string,
@@ -23,38 +107,26 @@ export async function fetchTransactions(
   const cached = txCache.get(wallet);
   if (cached) return cached;
 
-  const apiKey = process.env.HELIUS_API_KEY;
-  if (!apiKey) throw new HeliusAuthError("HELIUS_API_KEY is not set");
-
-  const all: HeliusTx[] = [];
-  let before: string | null = null;
-  for (let i = 0; i < maxPages; i++) {
-    const url: string =
-      `https://api.helius.xyz/v0/addresses/${wallet}/transactions` +
-      `?api-key=${apiKey}&limit=${PAGE_SIZE}` +
-      (before ? `&before=${before}` : "");
-    let page: HeliusTx[] | HeliusErrorResp;
-    try {
-      page = await fetchJSON(url);
-    } catch (e) {
-      throw new Error(
-        `Helius fetch failed for ${wallet.slice(0, 4)}…: ${(e as Error).message}`,
-      );
-    }
-    if (page && !Array.isArray(page) && (page as HeliusErrorResp).error) {
-      const errResp = page as HeliusErrorResp;
-      const msg = errResp.error?.message || JSON.stringify(errResp.error);
-      if (errResp.error?.code === -32401 || /invalid api key/i.test(msg)) {
-        throw new HeliusAuthError(msg);
-      }
-      throw new Error(`Helius API error for ${wallet.slice(0, 4)}…: ${msg}`);
-    }
-    if (!Array.isArray(page) || page.length === 0) break;
-    all.push(...page);
-    if (page.length < PAGE_SIZE) break;
-    before = page[page.length - 1]?.signature ?? null;
-    if (!before) break;
+  const configured = PROVIDERS.filter((p) => p.pageUrl(wallet, null) !== null);
+  if (configured.length === 0) {
+    throw new ProviderAuthError(
+      "No transaction provider configured (set HELIUS_API_KEY or TRITON_API_URL)",
+    );
   }
-  txCache.set(wallet, all);
-  return all;
+
+  const failures: string[] = [];
+  let allAuthFailures = true;
+  for (const provider of configured) {
+    try {
+      const all = await fetchFromProvider(provider, wallet, maxPages);
+      txCache.set(wallet, all);
+      return all;
+    } catch (e) {
+      if (!(e instanceof ProviderAuthError)) allAuthFailures = false;
+      failures.push((e as Error).message);
+    }
+  }
+  const summary = failures.join("; ");
+  if (allAuthFailures) throw new ProviderAuthError(summary);
+  throw new Error(`All transaction providers failed: ${summary}`);
 }
