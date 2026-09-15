@@ -1,0 +1,72 @@
+{
+  "uid": "portfolio-api-5xx-rate-high",
+  "title": "portfolio-api: 5xx rate > 0.2/s for 10m",
+  "ruleGroup": "portfolio-api",
+  "folderUID": "portfolio",
+  "noDataState": "OK",
+  "execErrState": "OK",
+  "for": "10m",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "breeze-gcm",
+      "queryType": "timeSeriesList",
+      "relativeTimeRange": { "from": 600, "to": 0 },
+      "model": {
+        "refId": "A",
+        "queryType": "timeSeriesList",
+        "timeSeriesList": {
+          "projectName": "trading-portfolio-104696",
+          "filters": [
+            "resource.type", "=", "cloud_run_revision", "AND",
+            "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
+            "metric.label.response_code_class", "=", "5xx", "AND",
+            "metric.type", "=", "run.googleapis.com/request_count"
+          ],
+          "alignmentPeriod": "cloud-monitoring-auto",
+          "perSeriesAligner": "ALIGN_RATE",
+          "crossSeriesReducer": "REDUCE_SUM",
+          "groupBys": []
+        }
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "queryType": "",
+      "relativeTimeRange": { "from": 0, "to": 0 },
+      "model": {
+        "type": "reduce",
+        "refId": "B",
+        "expression": "A",
+        "reducer": "last",
+        "settings": { "mode": "replaceNN", "replaceWithValue": 0 }
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "queryType": "",
+      "relativeTimeRange": { "from": 0, "to": 0 },
+      "model": {
+        "type": "threshold",
+        "refId": "C",
+        "expression": "B",
+        "conditions": [
+          {
+            "evaluator": { "type": "gt", "params": [0.2] },
+            "operator": { "type": "and" },
+            "query": { "params": ["B"] },
+            "reducer": { "type": "last", "params": [] },
+            "type": "query"
+          }
+        ]
+      }
+    }
+  ],
+  "condition": "C",
+  "annotations": {
+    "summary": "Portfolio API is returning 5xx at more than 0.2 req/s for 10 minutes."
+  },
+  "labels": { "service": "trading-portfolio", "severity": "critical" }
+}

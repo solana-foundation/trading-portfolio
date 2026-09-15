@@ -1,0 +1,144 @@
+name: Grafana push (dashboards + alert rules)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/grafana-push.yml'
+      - 'dashboards/**'
+      - 'alert-rules/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grafana-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      DOPPLER_PROJECT: trading-portfolio
+      DOPPLER_CONFIG: prd
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON
+        run: |
+          set -euo pipefail
+          for f in dashboards/*.json alert-rules/*.json; do
+            jq empty "$f"
+          done
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      - name: Fetch secrets from Doppler
+        id: secrets
+        run: |
+          set -euo pipefail
+          for key in GRAFANA_API_URL GRAFANA_API_TOKEN GRAFANA_FOLDER_UID; do
+            value=$(doppler secrets get "$key" --plain --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG")
+            echo "::add-mask::$value"
+            echo "$key=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Push dashboards
+        if: hashFiles('dashboards/*.json') != ''
+        env:
+          GRAFANA_API_URL: ${{ steps.secrets.outputs.GRAFANA_API_URL }}
+          GRAFANA_API_TOKEN: ${{ steps.secrets.outputs.GRAFANA_API_TOKEN }}
+          GRAFANA_FOLDER_UID: ${{ steps.secrets.outputs.GRAFANA_FOLDER_UID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in dashboards/*.json; do
+            name=$(basename "$f")
+            echo "::group::Push $name"
+            payload=$(jq --arg folder "$GRAFANA_FOLDER_UID" \
+              --arg msg "Pushed from $(git rev-parse --short HEAD)" \
+              '{dashboard: ., folderUid: $folder, overwrite: true, message: $msg}' "$f")
+            http_code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+              -X POST "$GRAFANA_API_URL/api/dashboards/db" \
+              -H "Authorization: Bearer $GRAFANA_API_TOKEN" \
+              -H 'Content-Type: application/json' \
+              --data "$payload")
+            if [ "$http_code" -ge 300 ]; then
+              echo "::error file=$f::Push failed ($http_code)"
+              cat /tmp/resp.json
+              exit 1
+            fi
+            jq -r '"  uid=\(.uid) url=\(.url)"' /tmp/resp.json
+            echo "::endgroup::"
+          done
+
+      - name: Push alert rules
+        if: hashFiles('alert-rules/*.json') != ''
+        env:
+          GRAFANA_API_URL: ${{ steps.secrets.outputs.GRAFANA_API_URL }}
+          GRAFANA_API_TOKEN: ${{ steps.secrets.outputs.GRAFANA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in alert-rules/*.json; do
+            name=$(basename "$f")
+            echo "::group::Push $name"
+            uid=$(jq -r '.uid // empty' "$f")
+            if [ -z "$uid" ]; then
+              echo "::error file=$f::missing top-level .uid"
+              exit 1
+            fi
+            payload=$(cat "$f")
+            http_code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+              -X PUT "$GRAFANA_API_URL/api/v1/provisioning/alert-rules/$uid" \
+              -H "Authorization: Bearer $GRAFANA_API_TOKEN" \
+              -H 'Content-Type: application/json' \
+              -H 'X-Disable-Provenance: true' \
+              --data "$payload")
+            if [ "$http_code" = "404" ]; then
+              http_code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+                -X POST "$GRAFANA_API_URL/api/v1/provisioning/alert-rules" \
+                -H "Authorization: Bearer $GRAFANA_API_TOKEN" \
+                -H 'Content-Type: application/json' \
+                -H 'X-Disable-Provenance: true' \
+                --data "$payload")
+            fi
+            if [ "$http_code" -ge 300 ]; then
+              echo "::error file=$f::Push failed ($http_code)"
+              cat /tmp/resp.json
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          SLACK_WEBHOOK=$(doppler secrets get SLACK_DEPLOY_WEBHOOK_URL --plain --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG")
+          [ -z "${SLACK_WEBHOOK:-}" ] && exit 0
+          SHA="${GITHUB_SHA:0:7}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          PAYLOAD=$(jq -n \
+            --arg sha "$SHA" --arg actor "$GITHUB_ACTOR" --arg run_url "$RUN_URL" \
+            '{
+              text: "*[FAILED] grafana-push* — Portfolio dashboards/alerts did not sync to Grafana",
+              attachments: [{
+                color: "#ff0000",
+                blocks: [
+                  {type:"section", text:{type:"mrkdwn", text:"*[FAILED] grafana-push*\nDashboards / alert rules did not sync to Grafana. Grafana is now drifted from `main`."}},
+                  {type:"section", fields:[
+                    {type:"mrkdwn", text:("*Commit:*\n`"+$sha+"`")},
+                    {type:"mrkdwn", text:("*Triggered by:*\n"+$actor)},
+                    {type:"mrkdwn", text:("*Run:*\n<"+$run_url+"|workflow>")}
+                  ]}
+                ]
+              }]
+            }')
+          curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' \
+            --data "$PAYLOAD" "$SLACK_WEBHOOK" || true
