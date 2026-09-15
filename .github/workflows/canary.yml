@@ -1,0 +1,57 @@
+name: Canary
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+env:
+  PROD_URL: https://trading-portfolio-prd-us-svykcev6mq-uk.a.run.app
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run smoke canary against prod
+        run: ./scripts/smoke.sh "$PROD_URL"
+
+      - name: Install Doppler CLI
+        if: failure()
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          SLACK_WEBHOOK=$(doppler secrets get SLACK_DEPLOY_WEBHOOK_URL --plain --project trading-portfolio --config prd)
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          PAYLOAD=$(jq -n \
+            --arg run_url "$RUN_URL" \
+            '{
+              text: "*[FAILED] Portfolio Canary* — prod smoke checks failing",
+              attachments: [{
+                color: "#ff0000",
+                blocks: [
+                  {type:"section", text:{type:"mrkdwn", text:"*[FAILED] Portfolio Canary*\nProd smoke checks are failing."}},
+                  {type:"section", fields:[
+                    {type:"mrkdwn", text:("*Run:*\n<"+$run_url+"|workflow>")}
+                  ]}
+                ]
+              }]
+            }')
+          curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' \
+            --data "$PAYLOAD" "$SLACK_WEBHOOK" || true

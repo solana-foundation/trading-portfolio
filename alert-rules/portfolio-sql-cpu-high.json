@@ -4,7 +4,7 @@
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
   "noDataState": "OK",
-  "execErrState": "OK",
+  "execErrState": "Error",
   "for": "15m",
   "data": [
     {
