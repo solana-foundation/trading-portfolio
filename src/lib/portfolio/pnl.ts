@@ -127,8 +127,9 @@ export async function getAggregateTradePnL(
     const day = Math.floor((ts || 0) / 86400) * 86400;
     const p = solPriceByDay.get(day);
     if (p) return p;
-    if (day !== todayDay) solPriceFellBack = true;
-    return currentSolPrice;
+    if (day === todayDay) return currentSolPrice;
+    solPriceFellBack = true;
+    return 0;
   };
   const solPriceUsd = currentSolPrice;
 

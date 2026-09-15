@@ -26,6 +26,7 @@ export async function POST(request: Request) {
       solPriceUsd: result.solPriceUsd,
       walletsScanned: result.walletsScanned,
       hasUnpriced: result.hasUnpriced,
+      historyTruncated: result.historyTruncated,
     });
   } catch (e) {
     if (e instanceof ProviderAuthError) {

@@ -60,6 +60,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       trades: page,
       total: trades.length,
+      historyTruncated: result.historyTruncated,
       nextCursor:
         page.length < trades.length && last
           ? `${last.ts}|${tradeSortKey(last)}`
