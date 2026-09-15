@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Git ref to deploy (defaults to main)'
-        required: false
-        default: 'main'
 
 permissions:
   contents: read
@@ -32,7 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
 
       - name: Install Doppler CLI
@@ -78,8 +72,6 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
 
       - id: sha
         run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -136,7 +128,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
 
       - name: Install Doppler CLI

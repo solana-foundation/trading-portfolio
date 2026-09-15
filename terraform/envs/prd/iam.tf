@@ -40,8 +40,6 @@ resource "google_project_iam_member" "cloud_run_runtime_roles" {
   member  = "serviceAccount:${google_service_account.cloud_run_runtime.email}"
 }
 
-# Grafana Cloud Monitoring reader (solanafoundation.grafana.net breeze-gcm
-# datasource) — lets Portfolio dashboards query this project's metrics.
 resource "google_project_iam_member" "grafana_gcm_reader" {
   project = var.project_id
   role    = "roles/monitoring.viewer"

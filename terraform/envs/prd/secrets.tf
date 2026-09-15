@@ -1,6 +1,3 @@
-# Vendor keys are seeded out-of-band from Doppler (tokens convention):
-#   doppler secrets get <KEY> --plain --project trading-portfolio --config prd \
-#     | gcloud secrets versions add trading-portfolio-<key>-prd --data-file=-
 resource "google_secret_manager_secret" "vendor" {
   for_each = toset([
     "helius-api-key",
@@ -20,6 +17,17 @@ resource "google_secret_manager_secret" "vendor" {
   }
 
   depends_on = [google_project_service.this["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret_version" "vendor_initial" {
+  for_each = google_secret_manager_secret.vendor
+
+  secret      = each.value.id
+  secret_data = ""
+
+  lifecycle {
+    ignore_changes = [secret_data, secret_data_wo_version]
+  }
 }
 
 resource "google_secret_manager_secret_iam_member" "vendor_accessor" {

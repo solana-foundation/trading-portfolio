@@ -23,7 +23,6 @@ resource "google_cloud_run_v2_service" "api" {
     }
 
     containers {
-      # Placeholder; real images are deployed by .github/workflows/deploy.yml.
       image = "us-docker.pkg.dev/cloudrun/container/hello"
 
       resources {
@@ -68,6 +67,8 @@ resource "google_cloud_run_v2_service" "api" {
 
   depends_on = [
     google_project_service.this["run.googleapis.com"],
+    google_secret_manager_secret_version.vendor_initial,
+    google_secret_manager_secret_version.database_url,
     google_secret_manager_secret_iam_member.vendor_accessor,
     google_secret_manager_secret_iam_member.database_url_accessor,
   ]

@@ -1,6 +1,18 @@
-# APIs required for the tokens-style Cloud Run deployment (TRD-317):
-# Dockerfile → Artifact Registry → Cloud Run behind an LB, secrets from
-# Secret Manager (Doppler-synced), WIF for GitHub Actions deploys.
+import {
+  to = google_secret_manager_secret_version.vendor_initial["helius-api-key"]
+  id = "projects/trading-portfolio-104696/secrets/trading-portfolio-helius-api-key-prd/versions/1"
+}
+
+import {
+  to = google_secret_manager_secret_version.vendor_initial["birdeye-api-key"]
+  id = "projects/trading-portfolio-104696/secrets/trading-portfolio-birdeye-api-key-prd/versions/1"
+}
+
+import {
+  to = google_secret_manager_secret_version.vendor_initial["triton-api-url"]
+  id = "projects/trading-portfolio-104696/secrets/trading-portfolio-triton-api-url-prd/versions/1"
+}
+
 locals {
   services = [
     "artifactregistry.googleapis.com",
