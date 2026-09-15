@@ -148,23 +148,14 @@ jobs:
             --set-secrets="$SECRET_REFS" \
             --quiet
 
-      - id: id_token
-        uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }}
-          token_format: id_token
-          id_token_audience: ${{ vars.PROD_BASE_URL }}
-          id_token_include_email: true
-
       - name: Prod smoke gate
-        env:
-          AUTH_TOKEN: ${{ steps.id_token.outputs.id_token }}
         run: |
           set -euo pipefail
           URL=$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --project=${{ vars.GCP_PROJECT }} --format='value(status.url)')
+          AUTH_TOKEN=$(gcloud auth print-identity-token --impersonate-service-account=${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }} --audiences="$URL" --include-email)
+          echo "::add-mask::$AUTH_TOKEN"
           REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
-          export REQUIRE_DATA
+          export AUTH_TOKEN REQUIRE_DATA
           ./scripts/smoke.sh "$URL"
 
   notify_end:
