@@ -14,6 +14,7 @@ All aggregation endpoints are stateless: wallet list in, merged result out, noth
 | `POST /api/portfolio/holdings` | `{wallets[]}` | Per-wallet and merged-by-token balances with USD values |
 | `POST /api/portfolio/pnl` | `{wallets[]}` | Per-asset cost basis, average cost, unrealized PnL, per wallet and across the group |
 | `POST /api/portfolio/trades` | `{wallets[], limit?, cursor?, mint?}` | Priced trade history (swaps + external transfer-ins), stable-cursor paginated |
+| `POST /api/portfolio/value-history` | `{wallets[]}` | Daily portfolio value series from Postgres: first request lazily backfills a wallet's full available history, later requests read the store, top up missing days, and compute today live. Per-wallet rows are write-once and shared; wallets untouched for 90 days are pruned. Requires `DATABASE_URL`; migrations in `db/migrations` (`db/apply.sh`) |
 
 ## Methodology
 

@@ -105,6 +105,39 @@ export async function getHistoricalPrice(
   }
 }
 
+const SERIES_CHUNK_DAYS = 800;
+
+export async function getPriceSeries(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  type Resp = {
+    success?: boolean;
+    data?: { items?: Array<{ unixTime?: number; value?: number }> };
+  };
+  for (let from = fromTs; from <= toTs; from += SERIES_CHUNK_DAYS * 86_400) {
+    const to = Math.min(from + SERIES_CHUNK_DAYS * 86_400 - 1, toTs);
+    try {
+      const data = await fetchJSON<Resp>(
+        `https://public-api.birdeye.so/defi/history_price?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
+        { headers: birdeyeHeaders() },
+      );
+      for (const item of data?.data?.items || []) {
+        if (typeof item.unixTime === "number" && typeof item.value === "number" && item.value > 0) {
+          out.set(Math.floor(item.unixTime / 86_400) * 86_400, item.value);
+        }
+      }
+    } catch (e) {
+      console.error(
+        `portfolio: Birdeye price series failed for ${mint.slice(0, 4)}…: ${(e as Error).message}`,
+      );
+    }
+  }
+  return out;
+}
+
 export async function getTokenMeta(
   mint: string,
 ): Promise<{ symbol: string; icon?: string } | null> {
