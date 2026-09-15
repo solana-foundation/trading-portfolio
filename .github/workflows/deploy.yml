@@ -70,6 +70,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -108,10 +110,15 @@ jobs:
             --project=${{ vars.GCP_PROJECT }} \
             --quiet
 
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
       - name: Prod smoke gate
         run: |
           set -euo pipefail
           URL=$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --project=${{ vars.GCP_PROJECT }} --format='value(status.url)')
+          REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
+          export REQUIRE_DATA
           ./scripts/smoke.sh "$URL"
 
   notify_end:
