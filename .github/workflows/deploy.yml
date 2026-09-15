@@ -107,19 +107,30 @@ jobs:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
           set -euo pipefail
-          ENV_VARS="^##^"
+          SECRET_REFS=""
           sep=""
           for key in HELIUS_API_KEY BIRDEYE_API_KEY TRITON_API_URL DATABASE_URL; do
             value=$(doppler secrets get "$key" --plain --project trading-portfolio --config prd)
+            if [ -z "$value" ]; then
+              echo "$key: empty in Doppler, skipped"
+              continue
+            fi
             echo "::add-mask::$value"
-            ENV_VARS+="${sep}${key}=${value}"
-            sep="##"
+            slug=$(echo "$key" | tr '[:upper:]_' '[:lower:]-')
+            secret="trading-portfolio-${slug}-prd"
+            current=$(gcloud secrets versions access latest --secret="$secret" --project=${{ vars.GCP_PROJECT }} 2>/dev/null || true)
+            if [ "$current" != "$value" ]; then
+              printf '%s' "$value" | gcloud secrets versions add "$secret" --project=${{ vars.GCP_PROJECT }} --data-file=-
+              echo "$secret: new version added"
+            fi
+            SECRET_REFS+="${sep}${key}=${secret}:latest"
+            sep=","
           done
           gcloud run deploy ${{ env.SERVICE }} \
             --image="$IMAGE" \
             --region=${{ env.GCP_REGION }} \
             --project=${{ vars.GCP_PROJECT }} \
-            --update-env-vars="$ENV_VARS" \
+            --set-secrets="$SECRET_REFS" \
             --quiet
 
       - name: Prod smoke gate
