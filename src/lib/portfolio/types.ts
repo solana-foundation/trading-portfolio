@@ -104,4 +104,5 @@ export type TradePnLResult = {
   solPriceUsd: number;
   walletsScanned: number;
   hasUnpriced: boolean;
+  historyTruncated: boolean;
 };

@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import {
   getHistoricalPrice,
   getHoldings,
   getTokenMeta,
 } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
-import { fetchTransactions } from "@/lib/portfolio/helius";
+import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 import {
   aggregateSwapEvents,
   SOL_MINT,
@@ -80,13 +81,24 @@ export async function getAggregateTradePnL(
   holdings: Holdings[],
   netWorthUsd?: number,
 ): Promise<TradePnLResult> {
-  const cacheKey = [...wallets].sort().join(",");
+  const holdingsFp = createHash("sha1")
+    .update(
+      JSON.stringify(
+        holdings.map((h) =>
+          (h.tokens || []).map((t) => [t.address, t.balance, t.price]),
+        ),
+      ),
+    )
+    .digest("hex");
+  const cacheKey = `${[...wallets].sort().join(",")}:${holdingsFp}`;
   const cached = resultCache.get(cacheKey);
   if (cached) return cached;
 
-  const txsPerWallet = await Promise.all(
+  const txFetches = await Promise.all(
     wallets.map((w) => fetchTransactions(w)),
   );
+  const txsPerWallet = txFetches.map((f) => f.txs);
+  const historyTruncated = txFetches.some((f) => f.truncated);
   const householdSet = new Set(wallets);
 
   const currentSolPrice =
@@ -109,8 +121,15 @@ export async function getAggregateTradePnL(
       if (p && p > 0) solPriceByDay.set(day, p);
     }),
   );
-  const solPriceAt = (ts: number) =>
-    solPriceByDay.get(Math.floor((ts || 0) / 86400) * 86400) ?? currentSolPrice;
+  const todayDay = Math.floor(Date.now() / 1000 / 86400) * 86400;
+  let solPriceFellBack = false;
+  const solPriceAt = (ts: number) => {
+    const day = Math.floor((ts || 0) / 86400) * 86400;
+    const p = solPriceByDay.get(day);
+    if (p) return p;
+    if (day !== todayDay) solPriceFellBack = true;
+    return currentSolPrice;
+  };
   const solPriceUsd = currentSolPrice;
 
   const swapEventsPerWallet = txsPerWallet.map((txs, i) =>
@@ -120,7 +139,8 @@ export async function getAggregateTradePnL(
 
   const byMint = new Map<string, MintAcc>();
   const perWalletByMint = wallets.map(() => new Map<string, WalletMintAcc>());
-  let hasUnpriced = swapEventsPerWallet.some((x) => x.unpricedSwaps > 0);
+  let hasUnpriced =
+    swapEventsPerWallet.some((x) => x.unpricedSwaps > 0) || solPriceFellBack;
 
   function bumpMint(
     mint: string,
@@ -257,7 +277,10 @@ export async function getAggregateTradePnL(
   for (const ev of transferEvents) {
     const day = Math.floor((ev.ts || 0) / 86400) * 86400;
     const price = priceMap.get(`${ev.mint}:${day}`);
-    if (!price || price <= 0) continue;
+    if (!price || price <= 0) {
+      hasUnpriced = true;
+      continue;
+    }
     const cost = ev.amount * price;
     bumpMint(ev.mint, cost, ev.amount, 1, "transfer");
     const wIdx = wallets.indexOf(ev.wallet);
@@ -285,14 +308,14 @@ export async function getAggregateTradePnL(
     const w = wallets[i];
     const rows: TradePnLRow[] = [];
     for (const t of holdings[i]?.tokens || []) {
-      if (isExcludedMint(t.address)) continue;
       const bal = t.balance || 0;
       if (bal <= 0) continue;
 
-      const own = perWalletByMint[i].get(t.address);
       const hh = byMint.get(t.address);
-
       totalValue += bal * (t.price || hh?.price || 0);
+      if (isExcludedMint(t.address)) continue;
+
+      const own = perWalletByMint[i].get(t.address);
 
       let totalSpent: number;
       let totalBought: number;
@@ -572,6 +595,7 @@ export async function getAggregateTradePnL(
     solPriceUsd,
     walletsScanned: wallets.length,
     hasUnpriced,
+    historyTruncated,
   };
   resultCache.set(cacheKey, result);
   return result;

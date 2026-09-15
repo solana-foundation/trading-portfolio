@@ -5,7 +5,12 @@ import type { HeliusTx } from "@/lib/portfolio/swaps";
 const PAGE_SIZE = 100;
 const DEFAULT_MAX_PAGES = 20;
 
-const txCache = new TtlCache<HeliusTx[]>(1_000, 60 * 60 * 1000);
+export type TxFetchResult = {
+  txs: HeliusTx[];
+  truncated: boolean;
+};
+
+const txCache = new TtlCache<TxFetchResult>(1_000, 60 * 60 * 1000);
 
 export class ProviderAuthError extends Error {
   constructor(msg: string) {
@@ -18,14 +23,9 @@ type ErrorResp = { error?: { code?: number; message?: string } };
 
 type TxProvider = {
   name: string;
-  /** null when the provider is not configured for this environment. */
   pageUrl: (wallet: string, before: string | null) => string | null;
 };
 
-// Ordered: first configured provider is primary, the rest are fallbacks.
-// ponytail: both providers must serve the Helius enhanced-transactions
-// response shape at /v0/addresses/{wallet}/transactions; add a per-provider
-// response adapter if a future backend diverges.
 const PROVIDERS: TxProvider[] = [
   {
     name: "helius",
@@ -42,7 +42,7 @@ const PROVIDERS: TxProvider[] = [
   {
     name: "triton",
     pageUrl: (wallet, before) => {
-      const base = process.env.TRITON_API_URL; // e.g. https://<pool>.rpcpool.com/<token>
+      const base = process.env.TRITON_API_URL;
       if (!base) return null;
       return (
         `${base.replace(/\/$/, "")}/v0/addresses/${wallet}/transactions` +
@@ -63,9 +63,10 @@ async function fetchFromProvider(
   provider: TxProvider,
   wallet: string,
   maxPages: number,
-): Promise<HeliusTx[]> {
+): Promise<TxFetchResult> {
   const all: HeliusTx[] = [];
   let before: string | null = null;
+  let truncated = true;
   for (let i = 0; i < maxPages; i++) {
     const url = provider.pageUrl(wallet, before);
     if (!url) throw new ProviderAuthError(`${provider.name} is not configured`);
@@ -91,19 +92,28 @@ async function fetchFromProvider(
         `${provider.name} API error for ${wallet.slice(0, 4)}…: ${msg}`,
       );
     }
-    if (!Array.isArray(page) || page.length === 0) break;
+    if (!Array.isArray(page) || page.length === 0) {
+      truncated = false;
+      break;
+    }
     all.push(...page);
-    if (page.length < PAGE_SIZE) break;
+    if (page.length < PAGE_SIZE) {
+      truncated = false;
+      break;
+    }
     before = page[page.length - 1]?.signature ?? null;
-    if (!before) break;
+    if (!before) {
+      truncated = false;
+      break;
+    }
   }
-  return all;
+  return { txs: all, truncated };
 }
 
 export async function fetchTransactions(
   wallet: string,
   maxPages = DEFAULT_MAX_PAGES,
-): Promise<HeliusTx[]> {
+): Promise<TxFetchResult> {
   const cached = txCache.get(wallet);
   if (cached) return cached;
 
@@ -118,9 +128,9 @@ export async function fetchTransactions(
   let allAuthFailures = true;
   for (const provider of configured) {
     try {
-      const all = await fetchFromProvider(provider, wallet, maxPages);
-      txCache.set(wallet, all);
-      return all;
+      const result = await fetchFromProvider(provider, wallet, maxPages);
+      txCache.set(wallet, result);
+      return result;
     } catch (e) {
       if (!(e instanceof ProviderAuthError)) allAuthFailures = false;
       failures.push((e as Error).message);

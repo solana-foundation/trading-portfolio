@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { ProviderAuthError } from "@/lib/portfolio/helius";
+import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 import {
   getAggregateTradePnL,
   getPortfolioHoldings,

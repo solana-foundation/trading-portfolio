@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ProviderAuthError } from "@/lib/portfolio/helius";
+import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 import { getAggregateTradePnL, getPortfolioHoldings } from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
 
