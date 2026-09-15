@@ -14,7 +14,16 @@ const CANONICAL_MINTS: Record<string, string> = {
 
 const DUST_THRESHOLD_USD = 0.01;
 
-const holdingsCache = new TtlCache<Holdings>(1_000, 2 * 60 * 1000);
+type TokenListItem = {
+  symbol?: string;
+  name?: string;
+  uiAmount?: number;
+  priceUsd?: number;
+  logoURI?: string;
+  address: string;
+};
+
+const tokenListCache = new TtlCache<TokenListItem[]>(1_000, 2 * 60 * 1000);
 const histPriceCache = new TtlCache<number>(10_000, 7 * 24 * 60 * 60 * 1000);
 const tokenMetaCache = new TtlCache<{ symbol: string; icon?: string }>(
   5_000,
@@ -28,30 +37,39 @@ function birdeyeHeaders(): Record<string, string> {
 }
 
 type BirdeyeHoldingsResp = {
-  data?: {
-    items?: Array<{
-      symbol?: string;
-      name?: string;
-      uiAmount?: number;
-      priceUsd?: number;
-      logoURI?: string;
-      address: string;
-    }>;
-  };
+  data?: { items?: TokenListItem[] };
 };
 
-export async function getHoldings(wallet: string): Promise<Holdings> {
-  const cached = holdingsCache.get(wallet);
+async function getTokenList(wallet: string): Promise<TokenListItem[]> {
+  const cached = tokenListCache.get(wallet);
   if (cached) return cached;
-
   const data = await fetchJSON<BirdeyeHoldingsResp>(
     `https://public-api.birdeye.so/v1/wallet/token_list?wallet=${wallet}`,
     { headers: birdeyeHeaders() },
   );
+  const items = data.data?.items || [];
+  tokenListCache.set(wallet, items);
+  return items;
+}
 
-  if (!data.data?.items) return { tokens: [], totalValue: 0 };
+export async function getRawBalances(
+  wallet: string,
+): Promise<Map<string, number>> {
+  const items = await getTokenList(wallet);
+  const out = new Map<string, number>();
+  for (const t of items) {
+    const balance = t.uiAmount || 0;
+    if (balance <= 0) continue;
+    const mint = t.address === NATIVE_SOL ? SOL_MINT : t.address;
+    out.set(mint, (out.get(mint) || 0) + balance);
+  }
+  return out;
+}
 
-  const tokens: TokenHolding[] = data.data.items
+export async function getHoldings(wallet: string): Promise<Holdings> {
+  const items = await getTokenList(wallet);
+
+  const tokens: TokenHolding[] = items
     .map((t) => ({
       symbol: t.symbol,
       name: t.name,
@@ -68,12 +86,10 @@ export async function getHoldings(wallet: string): Promise<Holdings> {
     })
     .sort((a, b) => b.value - a.value);
 
-  const holdings: Holdings = {
+  return {
     tokens,
     totalValue: tokens.reduce((s, t) => s + t.value, 0),
   };
-  holdingsCache.set(wallet, holdings);
-  return holdings;
 }
 
 export async function getHistoricalPrice(

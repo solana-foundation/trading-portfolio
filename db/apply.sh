@@ -39,8 +39,13 @@ for f in "$MIGRATIONS_DIR"/*.sql; do
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<SQL
 BEGIN;
 SELECT pg_advisory_xact_lock($ADVISORY_LOCK_KEY);
+SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '$base') AS applied \gset
+\if :applied
+ROLLBACK;
+\else
 \i $f
 COMMIT;
+\endif
 SQL
 done
 
