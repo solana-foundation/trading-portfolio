@@ -38,23 +38,6 @@ resource "google_cloud_run_v2_service" "api" {
         mount_path = "/cloudsql"
       }
 
-      dynamic "env" {
-        for_each = {
-          HELIUS_API_KEY  = google_secret_manager_secret.vendor["helius-api-key"].secret_id
-          BIRDEYE_API_KEY = google_secret_manager_secret.vendor["birdeye-api-key"].secret_id
-          TRITON_API_URL  = google_secret_manager_secret.vendor["triton-api-url"].secret_id
-          DATABASE_URL    = google_secret_manager_secret.database_url.secret_id
-        }
-        content {
-          name = env.key
-          value_source {
-            secret_key_ref {
-              secret  = env.value
-              version = "latest"
-            }
-          }
-        }
-      }
     }
   }
 
@@ -67,10 +50,6 @@ resource "google_cloud_run_v2_service" "api" {
 
   depends_on = [
     google_project_service.this["run.googleapis.com"],
-    google_secret_manager_secret_version.vendor_initial,
-    google_secret_manager_secret_version.database_url,
-    google_secret_manager_secret_iam_member.vendor_accessor,
-    google_secret_manager_secret_iam_member.database_url_accessor,
   ]
 }
 

@@ -99,19 +99,28 @@ jobs:
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
       - name: Deploy Cloud Run revision (prd)
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
           set -euo pipefail
+          ENV_VARS="^##^"
+          sep=""
+          for key in HELIUS_API_KEY BIRDEYE_API_KEY TRITON_API_URL DATABASE_URL; do
+            value=$(doppler secrets get "$key" --plain --project trading-portfolio --config prd)
+            echo "::add-mask::$value"
+            ENV_VARS+="${sep}${key}=${value}"
+            sep="##"
+          done
           gcloud run deploy ${{ env.SERVICE }} \
             --image="$IMAGE" \
             --region=${{ env.GCP_REGION }} \
             --project=${{ vars.GCP_PROJECT }} \
+            --update-env-vars="$ENV_VARS" \
             --quiet
-
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
 
       - name: Prod smoke gate
         run: |

@@ -1,18 +1,3 @@
-import {
-  to = google_secret_manager_secret_version.vendor_initial["helius-api-key"]
-  id = "projects/trading-portfolio-104696/secrets/trading-portfolio-helius-api-key-prd/versions/1"
-}
-
-import {
-  to = google_secret_manager_secret_version.vendor_initial["birdeye-api-key"]
-  id = "projects/trading-portfolio-104696/secrets/trading-portfolio-birdeye-api-key-prd/versions/1"
-}
-
-import {
-  to = google_secret_manager_secret_version.vendor_initial["triton-api-url"]
-  id = "projects/trading-portfolio-104696/secrets/trading-portfolio-triton-api-url-prd/versions/1"
-}
-
 locals {
   services = [
     "artifactregistry.googleapis.com",
