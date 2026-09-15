@@ -1,0 +1,188 @@
+name: Portfolio Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to deploy (defaults to main)'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  GCP_REGION: us-east4
+  SERVICE: trading-portfolio-prd-us
+
+jobs:
+  notify_start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 1
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      - name: Notify Slack — deploy started
+        env:
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          SLACK_WEBHOOK=$(doppler secrets get SLACK_DEPLOY_WEBHOOK_URL --plain --project trading-portfolio --config prd)
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          SHA=$(git rev-parse HEAD)
+          COMMIT_MSG=$(git log -1 --format=%s HEAD 2>/dev/null | cut -c1-140 || echo "")
+          PAYLOAD=$(jq -n \
+            --arg marker "[STARTED] Portfolio Deploy" \
+            --arg tiers "cloud-run/api" \
+            --arg short_sha "${SHA:0:7}" --arg commit_msg "$COMMIT_MSG" \
+            --arg actor "$ACTOR" --arg run_url "$RUN_URL" --arg run_id "$RUN_ID" \
+            '{
+              text: ("*" + $marker + "* — tiers: `" + $tiers + "`"),
+              attachments: [{
+                color: "#36a64f",
+                blocks: [
+                  {type:"section", text:{type:"mrkdwn", text:("*" + $marker + "*")}},
+                  {type:"section", fields:[
+                    {type:"mrkdwn",text:("*Tiers:*\n`"+$tiers+"`")},
+                    {type:"mrkdwn",text:("*Commit:*\n`"+$short_sha+"` — "+$commit_msg)},
+                    {type:"mrkdwn",text:("*Triggered by:*\n"+$actor)},
+                    {type:"mrkdwn",text:("*Run:*\n<"+$run_url+"|workflow #"+$run_id+">")}
+                  ]}
+                ]
+              }]
+            }')
+          curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' \
+            --data "$PAYLOAD" "$SLACK_WEBHOOK" || true
+
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - id: sha
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - id: auth
+        uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@77e7a554d41e2ee56fc945c52dfd3f33d12def9a # v2
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        id: build
+        env:
+          IMAGE: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/trading-portfolio-prd/api:${{ steps.sha.outputs.value }}
+        run: |
+          set -euo pipefail
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Cloud Run revision (prd)
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          set -euo pipefail
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image="$IMAGE" \
+            --region=${{ env.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT }} \
+            --quiet
+
+      - name: Prod smoke gate
+        run: |
+          set -euo pipefail
+          URL=$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --project=${{ vars.GCP_PROJECT }} --format='value(status.url)')
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 30 "$URL")
+          echo "service responded $code"
+          case "$code" in
+            5*|000) echo "smoke gate failed ($code)" >&2; exit 1 ;;
+          esac
+
+  notify_end:
+    needs: [deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 1
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      - name: Notify Slack — deploy finished
+        env:
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          SLACK_WEBHOOK=$(doppler secrets get SLACK_DEPLOY_WEBHOOK_URL --plain --project trading-portfolio --config prd)
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          if [ "$DEPLOY_RESULT" = "success" ]; then
+            STATUS=SUCCESS
+            COLOR='#36a64f'
+          else
+            STATUS=FAILED
+            COLOR='#ff0000'
+          fi
+          SHA=$(git rev-parse HEAD)
+          COMMIT_MSG=$(git log -1 --format=%s HEAD 2>/dev/null | cut -c1-140 || echo "")
+          PAYLOAD=$(jq -n \
+            --arg marker "[$STATUS] Portfolio Deploy" \
+            --arg tiers "cloud-run/api" \
+            --arg color "$COLOR" \
+            --arg short_sha "${SHA:0:7}" --arg commit_msg "$COMMIT_MSG" \
+            --arg actor "$ACTOR" --arg run_url "$RUN_URL" --arg run_id "$RUN_ID" \
+            --arg result "$DEPLOY_RESULT" \
+            '{
+              text: ("*" + $marker + "* — tiers: `" + $tiers + "`"),
+              attachments: [{
+                color: $color,
+                blocks: [
+                  {type:"section", text:{type:"mrkdwn", text:("*" + $marker + "*")}},
+                  {type:"section", fields:[
+                    {type:"mrkdwn",text:("*Tiers:*\n`"+$tiers+"`")},
+                    {type:"mrkdwn",text:("*Result:*\n`cloud-run/api: "+$result+"`")},
+                    {type:"mrkdwn",text:("*Commit:*\n`"+$short_sha+"` — "+$commit_msg)},
+                    {type:"mrkdwn",text:("*Triggered by:*\n"+$actor)},
+                    {type:"mrkdwn",text:("*Run:*\n<"+$run_url+"|workflow #"+$run_id+">")}
+                  ]}
+                ]
+              }]
+            }')
+          curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' \
+            --data "$PAYLOAD" "$SLACK_WEBHOOK" || true
