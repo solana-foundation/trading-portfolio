@@ -1,0 +1,194 @@
+{
+  "uid": "portfolio-api-overview",
+  "title": "Portfolio API — Overview",
+  "tags": ["portfolio", "cloud-run"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request rate by response class",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "stackdriver", "uid": "breeze-gcm" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "trading-portfolio-104696",
+            "filters": [
+              "resource.type", "=", "cloud_run_revision", "AND",
+              "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
+              "metric.type", "=", "run.googleapis.com/request_count"
+            ],
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": "ALIGN_RATE",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupBys": ["metric.label.response_code_class"]
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request latency p95",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "stackdriver", "uid": "breeze-gcm" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "trading-portfolio-104696",
+            "filters": [
+              "resource.type", "=", "cloud_run_revision", "AND",
+              "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
+              "metric.type", "=", "run.googleapis.com/request_latencies"
+            ],
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "groupBys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Instance count",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "stackdriver", "uid": "breeze-gcm" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "trading-portfolio-104696",
+            "filters": [
+              "resource.type", "=", "cloud_run_revision", "AND",
+              "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
+              "metric.type", "=", "run.googleapis.com/container/instance_count"
+            ],
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupBys": ["metric.label.state"]
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Container CPU utilization",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "stackdriver", "uid": "breeze-gcm" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "trading-portfolio-104696",
+            "filters": [
+              "resource.type", "=", "cloud_run_revision", "AND",
+              "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
+              "metric.type", "=", "run.googleapis.com/container/cpu/utilizations"
+            ],
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "groupBys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Cloud SQL CPU utilization",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "stackdriver", "uid": "breeze-gcm" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "trading-portfolio-104696",
+            "filters": [
+              "resource.type", "=", "cloudsql_database", "AND",
+              "resource.label.database_id", "=", "trading-portfolio-104696:trading-portfolio-prd", "AND",
+              "metric.type", "=", "cloudsql.googleapis.com/database/cpu/utilization"
+            ],
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "groupBys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Cloud SQL connections",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "stackdriver", "uid": "breeze-gcm" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "trading-portfolio-104696",
+            "filters": [
+              "resource.type", "=", "cloudsql_database", "AND",
+              "resource.label.database_id", "=", "trading-portfolio-104696:trading-portfolio-prd", "AND",
+              "metric.type", "=", "cloudsql.googleapis.com/database/postgresql/num_backends"
+            ],
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": "ALIGN_MEAN",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupBys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Billable instance time",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "stackdriver", "uid": "breeze-gcm" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "trading-portfolio-104696",
+            "filters": [
+              "resource.type", "=", "cloud_run_revision", "AND",
+              "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
+              "metric.type", "=", "run.googleapis.com/container/billable_instance_time"
+            ],
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": "ALIGN_RATE",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupBys": []
+          }
+        }
+      ]
+    }
+  ]
+}

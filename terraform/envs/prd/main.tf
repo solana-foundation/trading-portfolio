@@ -1,6 +1,3 @@
-# APIs required for the tokens-style Cloud Run deployment (TRD-317):
-# Dockerfile → Artifact Registry → Cloud Run behind an LB, secrets from
-# Secret Manager (Doppler-synced), WIF for GitHub Actions deploys.
 locals {
   services = [
     "artifactregistry.googleapis.com",

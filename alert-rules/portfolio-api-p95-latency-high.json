@@ -1,0 +1,71 @@
+{
+  "uid": "portfolio-api-p95-latency-high",
+  "title": "portfolio-api: p95 latency > 5s for 10m",
+  "ruleGroup": "portfolio-api",
+  "folderUID": "portfolio",
+  "noDataState": "OK",
+  "execErrState": "Error",
+  "for": "10m",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "breeze-gcm",
+      "queryType": "timeSeriesList",
+      "relativeTimeRange": { "from": 600, "to": 0 },
+      "model": {
+        "refId": "A",
+        "queryType": "timeSeriesList",
+        "timeSeriesList": {
+          "projectName": "trading-portfolio-104696",
+          "filters": [
+            "resource.type", "=", "cloud_run_revision", "AND",
+            "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
+            "metric.type", "=", "run.googleapis.com/request_latencies"
+          ],
+          "alignmentPeriod": "cloud-monitoring-auto",
+          "perSeriesAligner": "ALIGN_PERCENTILE_95",
+          "crossSeriesReducer": "REDUCE_MEAN",
+          "groupBys": []
+        }
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "queryType": "",
+      "relativeTimeRange": { "from": 0, "to": 0 },
+      "model": {
+        "type": "reduce",
+        "refId": "B",
+        "expression": "A",
+        "reducer": "last",
+        "settings": { "mode": "replaceNN", "replaceWithValue": 0 }
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "queryType": "",
+      "relativeTimeRange": { "from": 0, "to": 0 },
+      "model": {
+        "type": "threshold",
+        "refId": "C",
+        "expression": "B",
+        "conditions": [
+          {
+            "evaluator": { "type": "gt", "params": [5000] },
+            "operator": { "type": "and" },
+            "query": { "params": ["B"] },
+            "reducer": { "type": "last", "params": [] },
+            "type": "query"
+          }
+        ]
+      }
+    }
+  ],
+  "condition": "C",
+  "annotations": {
+    "summary": "Portfolio API p95 request latency has exceeded 5s for 10 minutes."
+  },
+  "labels": { "service": "trading-portfolio", "severity": "warning" }
+}

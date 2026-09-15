@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Git ref to deploy (defaults to main)'
-        required: false
-        default: 'main'
 
 permissions:
   contents: read
@@ -30,9 +25,8 @@ jobs:
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
 
       - name: Install Doppler CLI
@@ -76,10 +70,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - id: sha
         run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -105,26 +99,36 @@ jobs:
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
       - name: Deploy Cloud Run revision (prd)
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
           set -euo pipefail
+          ENV_VARS="^##^"
+          sep=""
+          for key in HELIUS_API_KEY BIRDEYE_API_KEY TRITON_API_URL DATABASE_URL; do
+            value=$(doppler secrets get "$key" --plain --project trading-portfolio --config prd)
+            echo "::add-mask::$value"
+            ENV_VARS+="${sep}${key}=${value}"
+            sep="##"
+          done
           gcloud run deploy ${{ env.SERVICE }} \
             --image="$IMAGE" \
             --region=${{ env.GCP_REGION }} \
             --project=${{ vars.GCP_PROJECT }} \
+            --update-env-vars="$ENV_VARS" \
             --quiet
 
       - name: Prod smoke gate
         run: |
           set -euo pipefail
           URL=$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --project=${{ vars.GCP_PROJECT }} --format='value(status.url)')
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 30 "$URL")
-          echo "service responded $code"
-          case "$code" in
-            5*|000) echo "smoke gate failed ($code)" >&2; exit 1 ;;
-          esac
+          REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
+          export REQUIRE_DATA
+          ./scripts/smoke.sh "$URL"
 
   notify_end:
     needs: [deploy]
@@ -134,9 +138,8 @@ jobs:
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
 
       - name: Install Doppler CLI

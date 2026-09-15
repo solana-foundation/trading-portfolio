@@ -1,0 +1,71 @@
+{
+  "uid": "portfolio-sql-cpu-high",
+  "title": "portfolio-sql: CPU > 80% for 15m",
+  "ruleGroup": "portfolio-api",
+  "folderUID": "portfolio",
+  "noDataState": "OK",
+  "execErrState": "Error",
+  "for": "15m",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "breeze-gcm",
+      "queryType": "timeSeriesList",
+      "relativeTimeRange": { "from": 900, "to": 0 },
+      "model": {
+        "refId": "A",
+        "queryType": "timeSeriesList",
+        "timeSeriesList": {
+          "projectName": "trading-portfolio-104696",
+          "filters": [
+            "resource.type", "=", "cloudsql_database", "AND",
+            "resource.label.database_id", "=", "trading-portfolio-104696:trading-portfolio-prd", "AND",
+            "metric.type", "=", "cloudsql.googleapis.com/database/cpu/utilization"
+          ],
+          "alignmentPeriod": "cloud-monitoring-auto",
+          "perSeriesAligner": "ALIGN_MEAN",
+          "crossSeriesReducer": "REDUCE_MEAN",
+          "groupBys": []
+        }
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "queryType": "",
+      "relativeTimeRange": { "from": 0, "to": 0 },
+      "model": {
+        "type": "reduce",
+        "refId": "B",
+        "expression": "A",
+        "reducer": "last",
+        "settings": { "mode": "replaceNN", "replaceWithValue": 0 }
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "queryType": "",
+      "relativeTimeRange": { "from": 0, "to": 0 },
+      "model": {
+        "type": "threshold",
+        "refId": "C",
+        "expression": "B",
+        "conditions": [
+          {
+            "evaluator": { "type": "gt", "params": [0.8] },
+            "operator": { "type": "and" },
+            "query": { "params": ["B"] },
+            "reducer": { "type": "last", "params": [] },
+            "type": "query"
+          }
+        ]
+      }
+    }
+  ],
+  "condition": "C",
+  "annotations": {
+    "summary": "Portfolio Cloud SQL instance CPU has exceeded 80% for 15 minutes."
+  },
+  "labels": { "service": "trading-portfolio", "severity": "warning" }
+}

@@ -4,8 +4,6 @@ resource "random_password" "app_user" {
   override_special = "_-"
 }
 
-# ponytail: public-IP instance reached only through the Cloud SQL connector
-# (no authorized networks); move to private VPC like tokens if required.
 resource "google_sql_database_instance" "this" {
   name                = "trading-portfolio-${var.env}"
   database_version    = "POSTGRES_16"

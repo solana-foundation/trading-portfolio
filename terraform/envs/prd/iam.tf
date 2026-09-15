@@ -40,6 +40,12 @@ resource "google_project_iam_member" "cloud_run_runtime_roles" {
   member  = "serviceAccount:${google_service_account.cloud_run_runtime.email}"
 }
 
+resource "google_project_iam_member" "grafana_gcm_reader" {
+  project = var.project_id
+  role    = "roles/monitoring.viewer"
+  member  = "serviceAccount:grafana-gcm-reader@solana-earn.iam.gserviceaccount.com"
+}
+
 resource "google_service_account" "cloudrun_deployer" {
   account_id   = "cr-deployer-${var.env}"
   display_name = "Cloud Run deployer (${var.env})"
