@@ -1,4 +1,8 @@
-import { getHoldings, getPriceSeries } from "@/lib/portfolio/birdeye";
+import {
+  getHoldings,
+  getNetWorthHistory,
+  getPriceSeries,
+} from "@/lib/portfolio/birdeye";
 import {
   DAY_SECONDS,
   floorDay,
@@ -14,6 +18,7 @@ const MAX_PRICED_MINTS = 25;
 export type WalletSeriesMeta = {
   genesisDay: string | null;
   days: number;
+  vendorDays: number;
   truncated: boolean;
   backfilledNow: boolean;
 };
@@ -203,8 +208,49 @@ async function syncWallet(
     );
   }
 
+  if (truncated) {
+    const state = await pool.query(
+      `SELECT extract(epoch FROM min(day) FILTER (WHERE source = 'engine'))::bigint AS engine_min,
+              count(*) FILTER (WHERE source = 'birdeye')::int AS vendor_days
+         FROM wallet_value_daily WHERE wallet = $1`,
+      [wallet],
+    );
+    const engineGenesis: number | null = state.rows[0].engine_min
+      ? Number(state.rows[0].engine_min)
+      : null;
+    if (engineGenesis !== null && Number(state.rows[0].vendor_days) === 0) {
+      const vendor = await getNetWorthHistory(wallet);
+      const values: string[] = [];
+      const params: unknown[] = [wallet];
+      for (const [day, value] of vendor) {
+        if (day >= engineGenesis) continue;
+        params.push(day, value);
+        values.push(
+          `($1, to_timestamp($${params.length - 1})::date, $${params.length}, 'birdeye')`,
+        );
+      }
+      if (values.length > 0) {
+        await pool.query(
+          `INSERT INTO wallet_value_daily (wallet, day, value_usd, source)
+           VALUES ${values.join(",")}
+           ON CONFLICT (wallet, day) DO NOTHING`,
+          params,
+        );
+        await pool.query(
+          `UPDATE wallet_sync
+              SET genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
+                  updated_at = now()
+            WHERE wallet = $1`,
+          [wallet],
+        );
+      }
+    }
+  }
+
   const bounds = await pool.query(
-    `SELECT extract(epoch FROM min(day))::bigint AS min_day, count(*)::int AS days
+    `SELECT extract(epoch FROM min(day))::bigint AS min_day,
+            count(*)::int AS days,
+            count(*) FILTER (WHERE source = 'birdeye')::int AS vendor_days
        FROM wallet_value_daily WHERE wallet = $1`,
     [wallet],
   );
@@ -214,6 +260,7 @@ async function syncWallet(
         ? isoDay(Number(bounds.rows[0].min_day))
         : null,
       days: bounds.rows[0].days,
+      vendorDays: bounds.rows[0].vendor_days,
       truncated,
       backfilledNow,
     },

@@ -138,6 +138,39 @@ export async function getPriceSeries(
   return out;
 }
 
+const NET_WORTH_MAX_DAYS = 90;
+
+export async function getNetWorthHistory(
+  wallet: string,
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  type Resp = {
+    data?: {
+      history?: Array<{ timestamp?: string; net_worth?: number }>;
+    };
+  };
+  try {
+    const data = await fetchJSON<Resp>(
+      `https://public-api.birdeye.so/wallet/v2/net-worth?wallet=${wallet}&count=${NET_WORTH_MAX_DAYS}&direction=back&type=1d`,
+      { headers: birdeyeHeaders() },
+    );
+    const today = Math.floor(Date.now() / 1000 / 86_400) * 86_400;
+    for (const row of data?.data?.history || []) {
+      if (!row.timestamp || typeof row.net_worth !== "number") continue;
+      const ts = Math.floor(Date.parse(row.timestamp) / 1000);
+      if (!Number.isFinite(ts)) continue;
+      const day = Math.floor(ts / 86_400) * 86_400;
+      if (day >= today) continue;
+      if (!out.has(day)) out.set(day, row.net_worth);
+    }
+  } catch (e) {
+    console.error(
+      `portfolio: Birdeye net-worth history failed for ${wallet.slice(0, 4)}…: ${(e as Error).message}`,
+    );
+  }
+  return out;
+}
+
 export async function getTokenMeta(
   mint: string,
 ): Promise<{ symbol: string; icon?: string } | null> {
