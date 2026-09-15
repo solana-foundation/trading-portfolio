@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: canary
@@ -24,7 +25,18 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
 
+      - id: id_token
+        uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ vars.PROD_BASE_URL }}
+          id_token_include_email: true
+
       - name: Run smoke canary against prod
+        env:
+          AUTH_TOKEN: ${{ steps.id_token.outputs.id_token }}
         run: |
           set -euo pipefail
           PROD_URL=$(doppler secrets get PROD_BASE_URL --plain --project trading-portfolio --config prd)
