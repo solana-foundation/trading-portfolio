@@ -12,9 +12,6 @@ concurrency:
   group: canary
   cancel-in-progress: false
 
-env:
-  PROD_URL: https://trading-portfolio-prd-us-svykcev6mq-uk.a.run.app
-
 jobs:
   canary:
     runs-on: ubuntu-latest
@@ -30,6 +27,7 @@ jobs:
       - name: Run smoke canary against prod
         run: |
           set -euo pipefail
+          PROD_URL=$(doppler secrets get PROD_BASE_URL --plain --project trading-portfolio --config prd)
           REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
           export REQUIRE_DATA
           ./scripts/smoke.sh "$PROD_URL"
