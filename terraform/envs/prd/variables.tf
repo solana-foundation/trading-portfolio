@@ -15,3 +15,9 @@ variable "env" {
   description = "Environment name (dev / stg / prd)."
   default     = "prd"
 }
+
+variable "github_repo" {
+  type        = string
+  description = "GitHub repo allowed to assume the deployer via WIF."
+  default     = "solana-foundation/trading-portfolio"
+}
