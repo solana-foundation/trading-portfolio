@@ -15,7 +15,8 @@ import { SOL_MINT, STABLECOIN_MINTS } from "@/lib/portfolio/swaps";
 import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 
 const STALE_AFTER_DAYS = 90;
-const MAX_PRICED_MINTS = 25;
+const MAX_PRICED_MINTS = 1000;
+const PRICE_FETCH_CONCURRENCY = 8;
 const VENDOR_WINDOW_DAYS = 90;
 
 export type WalletSeriesMeta = {
@@ -46,47 +47,91 @@ async function pricesFor(
   toDay: number,
 ): Promise<Map<string, Map<number, number>>> {
   const result = new Map<string, Map<number, number>>();
+  const lookup: string[] = [];
   for (const mint of mints) {
     if (STABLECOIN_MINTS.has(mint)) {
       const flat = new Map<number, number>();
       for (let d = fromDay; d <= toDay; d += DAY_SECONDS) flat.set(d, 1);
       result.set(mint, flat);
-      continue;
+    } else {
+      result.set(mint, new Map<number, number>());
+      lookup.push(mint);
     }
+  }
+  if (lookup.length > 0) {
     const cached = await client.query(
-      `SELECT extract(epoch FROM day)::bigint AS day_ts, price_usd
+      `SELECT mint, extract(epoch FROM day)::bigint AS day_ts, price_usd
          FROM price_daily
-        WHERE mint = $1 AND day BETWEEN to_timestamp($2)::date AND to_timestamp($3)::date`,
-      [mint, fromDay, toDay],
+        WHERE mint = ANY($1) AND day BETWEEN to_timestamp($2)::date AND to_timestamp($3)::date`,
+      [lookup, fromDay, toDay],
     );
-    const known = new Map<number, number>(
-      cached.rows.map((r) => [Number(r.day_ts), Number(r.price_usd)]),
-    );
-    let missing = 0;
-    for (let d = fromDay; d <= toDay; d += DAY_SECONDS) {
-      if (!known.has(d)) missing++;
+    for (const r of cached.rows) {
+      result.get(r.mint as string)?.set(Number(r.day_ts), Number(r.price_usd));
     }
-    if (missing > 0) {
-      const fetched = await getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1);
-      const values: string[] = [];
-      const params: unknown[] = [mint];
+  }
+  const needFetch: string[] = [];
+  for (const mint of lookup) {
+    const known = result.get(mint)!;
+    for (let d = fromDay; d <= toDay; d += DAY_SECONDS) {
+      if (!known.has(d)) {
+        needFetch.push(mint);
+        break;
+      }
+    }
+  }
+
+  const INSERT_CHUNK = 5000;
+  const FETCH_WAVE = 32;
+  for (let w = 0; w < needFetch.length; w += FETCH_WAVE) {
+    const wave = needFetch.slice(w, w + FETCH_WAVE);
+    const seriesByMint = new Map<
+      string,
+      Awaited<ReturnType<typeof getPriceSeries>>
+    >();
+    let next = 0;
+    async function fetchWorker(): Promise<void> {
+      while (next < wave.length) {
+        const mint = wave[next++];
+        seriesByMint.set(
+          mint,
+          await getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1),
+        );
+      }
+    }
+    await Promise.all(
+      Array.from(
+        { length: Math.min(PRICE_FETCH_CONCURRENCY, wave.length) },
+        () => fetchWorker(),
+      ),
+    );
+
+    const newRows: Array<[string, number, number]> = [];
+    for (const mint of wave) {
+      const known = result.get(mint);
+      const fetched = seriesByMint.get(mint);
+      if (!known || !fetched) continue;
       for (const [d, p] of fetched) {
         if (known.has(d) || d < fromDay || d > toDay) continue;
         known.set(d, p);
-        params.push(d, p);
-        values.push(
-          `($1, to_timestamp($${params.length - 1})::date, $${params.length})`,
-        );
-      }
-      if (values.length > 0) {
-        await client.query(
-          `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
-           ON CONFLICT (mint, day) DO NOTHING`,
-          params,
-        );
+        newRows.push([mint, d, p]);
       }
     }
-    result.set(mint, known);
+    for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
+      const chunk = newRows.slice(start, start + INSERT_CHUNK);
+      const values: string[] = [];
+      const params: unknown[] = [];
+      for (const [mint, d, p] of chunk) {
+        params.push(mint, d, p);
+        values.push(
+          `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
+        );
+      }
+      await client.query(
+        `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
+         ON CONFLICT (mint, day) DO NOTHING`,
+        params,
+      );
+    }
   }
   return result;
 }
