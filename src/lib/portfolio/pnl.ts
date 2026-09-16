@@ -44,6 +44,25 @@ function isExcludedMint(mint: string): boolean {
   return STABLECOIN_MINTS.has(mint);
 }
 
+const COVERAGE_TOLERANCE = 1 + 1e-6;
+
+export function coveredCostBasis(
+  balance: number,
+  totalSpent: number,
+  totalBought: number,
+): { coveredAmount: number; avgCostPerToken: number; costBasis: number } {
+  if (totalSpent <= 0 || totalBought <= 0 || balance <= 0) {
+    return { coveredAmount: 0, avgCostPerToken: 0, costBasis: 0 };
+  }
+  const avgCostPerToken = totalSpent / totalBought;
+  const coveredAmount = Math.min(balance, totalBought);
+  return {
+    coveredAmount,
+    avgCostPerToken,
+    costBasis: coveredAmount * avgCostPerToken,
+  };
+}
+
 type MintAcc = {
   totalSpent: number;
   totalBought: number;
@@ -318,33 +337,32 @@ export async function getAggregateTradePnL(
 
       const own = perWalletByMint[i].get(t.address);
 
-      let totalSpent: number;
-      let totalBought: number;
-      let denom: number;
-      let sourcesSet: Set<string>;
-      let attribution: "wallet" | "household";
-      if (own && own.totalSpent > 0) {
-        totalSpent = own.totalSpent;
-        totalBought = own.totalBought;
-        denom = Math.max(own.totalBought, bal);
-        sourcesSet = own.sources;
-        attribution = "wallet";
-      } else if (hh && hh.totalSpent > 0) {
-        totalSpent = hh.totalSpent;
-        totalBought = hh.totalBought;
-        denom = Math.max(hh.totalBought, hh.totalHeld);
-        sourcesSet = hh.sources;
-        attribution = "household";
-      } else {
-        continue;
-      }
+      const ownUsable = own && own.totalSpent > 0 && own.totalBought > 0;
+      const hhUsable = hh && hh.totalSpent > 0 && hh.totalBought > 0;
+      if (!ownUsable && !hhUsable) continue;
+      const preferOwn =
+        ownUsable &&
+        (!hhUsable ||
+          Math.min(bal, own.totalBought) >= Math.min(bal, hh.totalBought));
+      const totalSpent = preferOwn ? own!.totalSpent : hh!.totalSpent;
+      const totalBought = preferOwn ? own!.totalBought : hh!.totalBought;
+      const sourcesSet = preferOwn ? own!.sources : hh!.sources;
+      const attribution: "wallet" | "household" = preferOwn
+        ? "wallet"
+        : "household";
 
-      const perTokenCost = denom > 0 ? totalSpent / denom : 0;
+      const { coveredAmount, avgCostPerToken, costBasis } = coveredCostBasis(
+        bal,
+        totalSpent,
+        totalBought,
+      );
+      if (bal > totalBought * COVERAGE_TOLERANCE) hasUnpriced = true;
+      const perTokenCost = avgCostPerToken;
       const currentPrice = t.price || hh?.price || 0;
       const currentValue = bal * currentPrice;
-      const amountSpent = bal * perTokenCost;
-      const pnl = currentValue - amountSpent;
-      const pnlPercent = amountSpent > 0 ? (pnl / amountSpent) * 100 : 0;
+      const amountSpent = costBasis;
+      const pnl = coveredAmount * currentPrice - costBasis;
+      const pnlPercent = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
 
       rows.push({
         mint: t.address,
@@ -580,11 +598,11 @@ export async function getAggregateTradePnL(
   );
 
   const mintCosts = Array.from(byMint.entries())
-    .filter(([, m]) => m.totalSpent > 0 && Math.max(m.totalBought, m.totalHeld) > 0)
+    .filter(([, m]) => m.totalSpent > 0 && m.totalBought > 0)
     .map(([mint, m]) => ({
       mint,
       symbol: m.symbol || null,
-      avgCostPerToken: m.totalSpent / Math.max(m.totalBought, m.totalHeld),
+      avgCostPerToken: m.totalSpent / m.totalBought,
     }));
 
   const result: TradePnLResult = {
