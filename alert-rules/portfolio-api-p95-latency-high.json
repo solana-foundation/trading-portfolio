@@ -11,16 +11,27 @@
       "refId": "A",
       "datasourceUid": "breeze-gcm",
       "queryType": "timeSeriesList",
-      "relativeTimeRange": { "from": 600, "to": 0 },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      },
       "model": {
         "refId": "A",
         "queryType": "timeSeriesList",
         "timeSeriesList": {
           "projectName": "trading-portfolio-104696",
           "filters": [
-            "resource.type", "=", "cloud_run_revision", "AND",
-            "resource.label.service_name", "=", "trading-portfolio-prd-us", "AND",
-            "metric.type", "=", "run.googleapis.com/request_latencies"
+            "resource.type",
+            "=",
+            "cloud_run_revision",
+            "AND",
+            "resource.label.service_name",
+            "=",
+            "trading-portfolio-prd-us",
+            "AND",
+            "metric.type",
+            "=",
+            "run.googleapis.com/request_latencies"
           ],
           "alignmentPeriod": "cloud-monitoring-auto",
           "perSeriesAligner": "ALIGN_PERCENTILE_95",
@@ -33,30 +44,53 @@
       "refId": "B",
       "datasourceUid": "__expr__",
       "queryType": "",
-      "relativeTimeRange": { "from": 0, "to": 0 },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      },
       "model": {
         "type": "reduce",
         "refId": "B",
         "expression": "A",
         "reducer": "last",
-        "settings": { "mode": "replaceNN", "replaceWithValue": 0 }
+        "settings": {
+          "mode": "replaceNN",
+          "replaceWithValue": 0
+        }
       }
     },
     {
       "refId": "C",
       "datasourceUid": "__expr__",
       "queryType": "",
-      "relativeTimeRange": { "from": 0, "to": 0 },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      },
       "model": {
         "type": "threshold",
         "refId": "C",
         "expression": "B",
         "conditions": [
           {
-            "evaluator": { "type": "gt", "params": [5000] },
-            "operator": { "type": "and" },
-            "query": { "params": ["B"] },
-            "reducer": { "type": "last", "params": [] },
+            "evaluator": {
+              "type": "gt",
+              "params": [
+                5000
+              ]
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "B"
+              ]
+            },
+            "reducer": {
+              "type": "last",
+              "params": []
+            },
             "type": "query"
           }
         ]
@@ -67,5 +101,11 @@
   "annotations": {
     "summary": "Portfolio API p95 request latency has exceeded 5s for 10 minutes."
   },
-  "labels": { "service": "trading-portfolio", "severity": "warning" }
+  "labels": {
+    "service": "trading-portfolio",
+    "severity": "warning"
+  },
+  "notification_settings": {
+    "receiver": "alerts-trading"
+  }
 }
