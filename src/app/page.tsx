@@ -36,6 +36,8 @@ type ValueHistoryResponse = {
 
 type HoldSortKey = "symbol" | "balance" | "price" | "value" | "basis" | "pnl";
 
+const TRADES_PER_PAGE = 10;
+
 type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
 
 function usePost<T>(path: string, wallets: string[]): FetchState<T> {
@@ -446,6 +448,15 @@ function Dashboard() {
 
   const summary = pnl.data?.summary ?? null;
   const trades = pnl.data?.tradeHistory ?? [];
+  const [tradePage, setTradePage] = useState(0);
+  useEffect(() => {
+    setTradePage(0);
+  }, [pnl.data]);
+  const tradePageCount = Math.ceil(trades.length / TRADES_PER_PAGE);
+  const pageTrades = trades.slice(
+    tradePage * TRADES_PER_PAGE,
+    (tradePage + 1) * TRADES_PER_PAGE,
+  );
   const unpricedHeld = (holdings.data?.merged.tokens ?? []).filter(
     (t) => t.balance > 0 && t.price <= 0,
   );
@@ -687,7 +698,7 @@ function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {trades.slice(0, 50).map((t, i) => (
+                  {pageTrades.map((t, i) => (
                     <tr key={`${t.signature ?? i}-${t.mint}-${i}`}>
                       <td>{t.ts ? new Date(t.ts * 1000).toISOString().slice(0, 10) : "—"}</td>
                       <td className={t.side === "buy" ? "pos" : "neg"}>{t.side}</td>
@@ -715,6 +726,38 @@ function Dashboard() {
               </table>
             )}
             {pnl.data && trades.length === 0 && <p className="muted">No trades found.</p>}
+            {tradePageCount > 1 && (
+              <div
+                className="row"
+                style={{ justifyContent: "center", marginTop: 10, gap: 14 }}
+              >
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={tradePage === 0}
+                  style={tradePage === 0 ? { opacity: 0.4 } : undefined}
+                  onClick={() => setTradePage((p) => Math.max(0, p - 1))}
+                >
+                  ‹ Prev
+                </button>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Page {tradePage + 1} of {tradePageCount} · {trades.length} trades
+                </span>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={tradePage >= tradePageCount - 1}
+                  style={
+                    tradePage >= tradePageCount - 1 ? { opacity: 0.4 } : undefined
+                  }
+                  onClick={() =>
+                    setTradePage((p) => Math.min(tradePageCount - 1, p + 1))
+                  }
+                >
+                  Next ›
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
