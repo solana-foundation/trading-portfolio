@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { classifyHolding } from "@/lib/portfolio/birdeye";
 import { getPortfolioHoldings } from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
 import type { TokenHolding } from "@/lib/portfolio/types";
@@ -29,17 +30,30 @@ export async function POST(request: Request) {
         }
       }
     }
-    const mergedTokens = Array.from(merged.values()).sort(
-      (a, b) => b.value - a.value,
-    );
+    const mergedTokens: TokenHolding[] = Array.from(merged.values())
+      .map(({ hidden: _prior, ...rest }) => {
+        const hidden = classifyHolding(rest);
+        return hidden ? { ...rest, hidden } : rest;
+      })
+      .sort((a, b) => b.value - a.value);
+    const mergedVisible = mergedTokens.filter((t) => !t.hidden);
 
     return NextResponse.json({
       perWallet: Object.fromEntries(
-        parsed.wallets.map((w, i) => [w, holdings[i]]),
+        parsed.wallets.map((w, i) => [
+          w,
+          holdings[i] && {
+            tokens: holdings[i].tokens,
+            totalValue: holdings[i].totalValue,
+            unpricedCount: holdings[i].unpricedCount,
+          },
+        ]),
       ),
       merged: {
         tokens: mergedTokens,
-        totalValue: mergedTokens.reduce((s, t) => s + t.value, 0),
+        totalValue: mergedVisible.reduce((s, t) => s + t.value, 0),
+        unpricedCount: new Set(holdings.flatMap((h) => h?.unpricedMints || []))
+          .size,
       },
     });
   } catch (e) {
