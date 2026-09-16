@@ -152,8 +152,10 @@ jobs:
         run: |
           set -euo pipefail
           URL=$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --project=${{ vars.GCP_PROJECT }} --format='value(status.url)')
+          AUTH_TOKEN=$(gcloud auth print-identity-token --impersonate-service-account=${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }} --audiences="$URL" --include-email)
+          echo "::add-mask::$AUTH_TOKEN"
           REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
-          export REQUIRE_DATA
+          export AUTH_TOKEN REQUIRE_DATA
           ./scripts/smoke.sh "$URL"
 
   notify_end:

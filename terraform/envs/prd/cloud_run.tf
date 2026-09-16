@@ -53,10 +53,21 @@ resource "google_cloud_run_v2_service" "api" {
   ]
 }
 
-resource "google_cloud_run_v2_service_iam_member" "allusers_invoker" {
+resource "google_service_account" "invoker" {
+  account_id   = "portfolio-invoker-${var.env}"
+  display_name = "Portfolio API invoker (${var.env})"
+  description  = "Identity internal services use to call the private portfolio API."
+}
+
+resource "google_cloud_run_v2_service_iam_member" "invokers" {
+  for_each = {
+    internal = google_service_account.invoker.email
+    deployer = google_service_account.cloudrun_deployer.email
+  }
+
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.api.name
   role     = "roles/run.invoker"
-  member   = "allUsers"
+  member   = "serviceAccount:${each.value}"
 }

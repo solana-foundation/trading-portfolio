@@ -69,3 +69,9 @@ resource "google_service_account_iam_member" "cloudrun_deployer_wif_binding" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.ref/refs/heads/main"
 }
+
+resource "google_service_account_iam_member" "cloudrun_deployer_token_creator" {
+  service_account_id = google_service_account.cloudrun_deployer.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.ref/refs/heads/main"
+}
