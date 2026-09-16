@@ -40,11 +40,12 @@ Request: `{"wallets": ["..."]}`
     "investedTotal": 85893.79,       // sum of covered cost bases
     "investedGross": 103518.33,      // gross external inflows (cashflow-based)
     "realizedReceipts": 0.94,        // gross external outflows
-    "absoluteReturnUsd": 32991.52,   // currentValue - investedTotal
-    "absoluteReturnPct": 38.41,      // null when investedTotal is 0
-    "xirrPct": 24.1,                 // annualized, from dated external cashflows; null if underdetermined
-    "benchmarkSolXirrPct": -69.11,   // same cashflows had they bought SOL
-    "cashflowCount": 43
+    "absoluteReturnUsd": 32991.52,   // covered PnL: sum of per-asset pnl over covered basis
+    "absoluteReturnPct": 38.41,      // covered PnL / covered basis; null when no basis
+    "xirrPct": 24.1,                 // annualized from dated external cashflows; null when history is truncated or the cashflow window is under 7 days
+    "benchmarkSolXirrPct": -69.11,   // same cashflows had they bought SOL; null under the same conditions
+    "cashflowCount": 43,
+    "unpricedCashflowCount": 2       // external transfers with no day-of price, excluded from cashflows
   },
   "totals": { "totalPnL": 0, "totalCostBasis": 0, "totalValue": 0 },
   "perWalletValue": { "<wallet>": 12345.67 },
@@ -65,21 +66,27 @@ Request: `{"wallets": ["..."]}`
     "<wallet>": {
       "tokens": [
         { "address": "<mint>", "symbol": "SOL", "name": "Solana",
-          "icon": "https://…", "balance": 1.5, "price": 261.4, "value": 392.1 }
+          "icon": "https://…", "balance": 1.5, "price": 261.4, "value": 392.1 },
+        { "address": "<mint>", "symbol": "USDC", "balance": 5000,
+          "price": 1, "value": 5000, "hidden": "impostor" }
       ],
       "totalValue": 392.1,
       "unpricedCount": 3
     }
   },
-  "merged": { "tokens": [ /* same shape, summed across wallets */ ], "totalValue": 392.1, "unpricedCount": 3 }
+  "merged": { "tokens": [ /* same shape, summed across wallets, reclassified */ ], "totalValue": 392.1, "unpricedCount": 3 }
 }
 ```
 
-Token rows exclude dust below $0.01 and tokens the vendor cannot price
-(their value computes to 0, and unpriced spam would otherwise dominate the
-list). Those excluded-but-held tokens are counted in `unpricedCount` per
-wallet and on `merged`, and any nonzero count raises `hasUnpriced` on
-`/pnl` — dropped rows are countable, never invisible.
+The token list is complete — every held token is returned. Junk is marked,
+not dropped: `hidden: "impostor"` (token faking a canonical symbol like
+USDC/USDT/SOL under a different mint), `"unpriced"` (vendor has no price),
+or `"dust"` (≤ $0.01). Clients render visible tokens by default with a
+"show hidden (N)" affordance. `totalValue` sums visible tokens only —
+impostor vendor prices are untrustworthy and never touch net worth — and
+merged rows are reclassified after summing. `unpricedCount` counts hidden
+unpriced tokens (distinct mints on `merged`); any nonzero count raises
+`hasUnpriced` on `/pnl`.
 
 ### `POST /api/portfolio/pnl`
 
