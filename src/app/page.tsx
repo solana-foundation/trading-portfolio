@@ -509,6 +509,7 @@ function Dashboard() {
     key: "value",
     dir: -1,
   });
+  const [showHiddenTokens, setShowHiddenTokens] = useState(false);
   const sortedTokens = useMemo(() => {
     const tokens = holdings.data?.merged.tokens ?? [];
     const keyOf = (t: TokenHolding): string | number => {
@@ -693,13 +694,21 @@ function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTokens.map((t) => {
+                  {(showHiddenTokens
+                    ? sortedTokens
+                    : sortedTokens.filter((t) => !t.hidden)
+                  ).map((t) => {
                     const p = pnlByMint.get(t.address);
                     return (
                       <tr key={t.address}>
                         <td>
                           <span className="token">
-                            <span>{t.symbol || shortAddr(t.address)}</span>
+                            <span style={t.hidden ? { opacity: 0.5 } : undefined}>
+                              {t.symbol || shortAddr(t.address)}
+                            </span>
+                            {t.hidden && (
+                              <span className="badge warn">{t.hidden}</span>
+                            )}
                           </span>
                         </td>
                         <td className="mono">{fmtAmt(t.balance)}</td>
@@ -720,6 +729,19 @@ function Dashboard() {
                   })}
                 </tbody>
               </table>
+            )}
+            {sortedTokens.some((t) => t.hidden) && (
+              <div className="row" style={{ justifyContent: "center", marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setShowHiddenTokens((v) => !v)}
+                >
+                  {showHiddenTokens
+                    ? "Hide spam & dust"
+                    : `Show hidden tokens (${sortedTokens.filter((t) => t.hidden).length})`}
+                </button>
+              </div>
             )}
           </div>
 
