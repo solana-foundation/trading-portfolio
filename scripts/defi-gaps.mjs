@@ -169,13 +169,17 @@ async function scanWallet(wallet) {
   if (interactions === null) {
     findings.push({ protocol: "unknown", status: "scan-unavailable" });
   } else {
+    const detectorPrograms = new Set(
+      REGISTRY.filter(hasDetector).map((p) => p.program),
+    );
     const byProgram = new Map(REGISTRY.map((p) => [p.program, p]));
     const unknown = [];
     const unverified = [];
     for (const it of interactions) {
+      if (detectorPrograms.has(it.program)) continue;
       const proto = byProgram.get(it.program);
       if (!proto) unknown.push(it);
-      else if (!hasDetector(proto)) unverified.push({ ...it, protocol: proto.name });
+      else unverified.push({ ...it, protocol: proto.name });
     }
     if (unverified.length > 0) {
       findings.push({ protocol: "registry", status: "interaction-unverified", programs: unverified });
