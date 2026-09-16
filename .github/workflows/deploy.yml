@@ -167,6 +167,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    continue-on-error: true
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
