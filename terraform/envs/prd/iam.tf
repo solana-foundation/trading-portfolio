@@ -55,6 +55,7 @@ resource "google_service_account" "cloudrun_deployer" {
 resource "google_project_iam_member" "cloudrun_deployer_roles" {
   for_each = toset([
     "roles/run.admin",
+    "roles/cloudsql.client",
     "roles/artifactregistry.writer",
     "roles/iam.serviceAccountUser",
   ])
@@ -66,5 +67,11 @@ resource "google_project_iam_member" "cloudrun_deployer_roles" {
 resource "google_service_account_iam_member" "cloudrun_deployer_wif_binding" {
   service_account_id = google_service_account.cloudrun_deployer.name
   role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.ref/refs/heads/main"
+}
+
+resource "google_service_account_iam_member" "cloudrun_deployer_token_creator" {
+  service_account_id = google_service_account.cloudrun_deployer.name
+  role               = "roles/iam.serviceAccountTokenCreator"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.ref/refs/heads/main"
 }

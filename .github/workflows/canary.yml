@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: canary
@@ -24,12 +25,22 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
 
+      - id: auth
+        uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@77e7a554d41e2ee56fc945c52dfd3f33d12def9a # v2
+
       - name: Run smoke canary against prod
         run: |
           set -euo pipefail
           PROD_URL=$(doppler secrets get PROD_BASE_URL --plain --project trading-portfolio --config prd)
+          AUTH_TOKEN=$(gcloud auth print-identity-token --impersonate-service-account=${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }} --audiences="$PROD_URL" --include-email)
+          echo "::add-mask::$AUTH_TOKEN"
           REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
-          export REQUIRE_DATA
+          export AUTH_TOKEN REQUIRE_DATA
           ./scripts/smoke.sh "$PROD_URL"
 
       - name: Notify Slack on failure
@@ -38,7 +49,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          SLACK_WEBHOOK=$(doppler secrets get SLACK_DEPLOY_WEBHOOK_URL --plain --project trading-portfolio --config prd)
+          SLACK_WEBHOOK=$(doppler secrets get SLACK_ALERT_WEBHOOK_URL --plain --project trading-portfolio --config prd)
           [ -z "$SLACK_WEBHOOK" ] && exit 0
           PAYLOAD=$(jq -n \
             --arg run_url "$RUN_URL" \
