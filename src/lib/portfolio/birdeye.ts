@@ -86,10 +86,14 @@ export async function getHoldings(wallet: string): Promise<Holdings> {
     })
     .sort((a, b) => b.value - a.value);
 
+  const unpricedMints = mapped
+    .filter((t) => t.balance > 0 && t.price <= 0)
+    .map((t) => t.address);
   return {
     tokens,
     totalValue: tokens.reduce((s, t) => s + t.value, 0),
-    unpricedCount: mapped.filter((t) => t.balance > 0 && t.price <= 0).length,
+    unpricedCount: unpricedMints.length,
+    unpricedMints,
   };
 }
 

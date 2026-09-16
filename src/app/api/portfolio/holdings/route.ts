@@ -35,12 +35,20 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       perWallet: Object.fromEntries(
-        parsed.wallets.map((w, i) => [w, holdings[i]]),
+        parsed.wallets.map((w, i) => [
+          w,
+          holdings[i] && {
+            tokens: holdings[i].tokens,
+            totalValue: holdings[i].totalValue,
+            unpricedCount: holdings[i].unpricedCount,
+          },
+        ]),
       ),
       merged: {
         tokens: mergedTokens,
         totalValue: mergedTokens.reduce((s, t) => s + t.value, 0),
-        unpricedCount: holdings.reduce((s, h) => s + (h?.unpricedCount || 0), 0),
+        unpricedCount: new Set(holdings.flatMap((h) => h?.unpricedMints || []))
+          .size,
       },
     });
   } catch (e) {

@@ -14,6 +14,7 @@ export type Holdings = {
   tokens: TokenHolding[];
   totalValue: number;
   unpricedCount: number;
+  unpricedMints: SolanaAddress[];
 };
 
 export type CashEvent = {
