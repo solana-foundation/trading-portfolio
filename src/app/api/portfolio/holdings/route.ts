@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       merged: {
         tokens: mergedTokens,
         totalValue: mergedTokens.reduce((s, t) => s + t.value, 0),
+        unpricedCount: holdings.reduce((s, h) => s + (h?.unpricedCount || 0), 0),
       },
     });
   } catch (e) {

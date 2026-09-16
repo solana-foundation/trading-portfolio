@@ -161,7 +161,9 @@ export async function getAggregateTradePnL(
   const byMint = new Map<string, MintAcc>();
   const perWalletByMint = wallets.map(() => new Map<string, WalletMintAcc>());
   let hasUnpriced =
-    swapEventsPerWallet.some((x) => x.unpricedSwaps > 0) || solPriceFellBack;
+    swapEventsPerWallet.some((x) => x.unpricedSwaps > 0) ||
+    solPriceFellBack ||
+    holdings.some((h) => (h?.unpricedCount || 0) > 0);
 
   function bumpMint(
     mint: string,
@@ -363,7 +365,10 @@ export async function getAggregateTradePnL(
 
       const ownUsable = own && own.totalSpent > 0 && own.totalBought > 0;
       const hhUsable = hh && hh.totalSpent > 0 && hh.totalBought > 0;
-      if (!ownUsable && !hhUsable) continue;
+      if (!ownUsable && !hhUsable) {
+        hasUnpriced = true;
+        continue;
+      }
 
       const ownPart = ownUsable
         ? coveredCostBasis(bal, own!.totalSpent, own!.totalBought)

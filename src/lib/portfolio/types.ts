@@ -13,6 +13,7 @@ export type TokenHolding = {
 export type Holdings = {
   tokens: TokenHolding[];
   totalValue: number;
+  unpricedCount: number;
 };
 
 export type CashEvent = {

@@ -69,16 +69,16 @@ export async function getRawBalances(
 export async function getHoldings(wallet: string): Promise<Holdings> {
   const items = await getTokenList(wallet);
 
-  const tokens: TokenHolding[] = items
-    .map((t) => ({
-      symbol: t.symbol,
-      name: t.name,
-      balance: t.uiAmount || 0,
-      price: t.priceUsd || 0,
-      value: (t.uiAmount || 0) * (t.priceUsd || 0),
-      icon: t.logoURI,
-      address: t.address === NATIVE_SOL ? SOL_MINT : t.address,
-    }))
+  const mapped: TokenHolding[] = items.map((t) => ({
+    symbol: t.symbol,
+    name: t.name,
+    balance: t.uiAmount || 0,
+    price: t.priceUsd || 0,
+    value: (t.uiAmount || 0) * (t.priceUsd || 0),
+    icon: t.logoURI,
+    address: t.address === NATIVE_SOL ? SOL_MINT : t.address,
+  }));
+  const tokens = mapped
     .filter((t) => t.value > DUST_THRESHOLD_USD)
     .filter((t) => {
       const canonical = CANONICAL_MINTS[(t.symbol || "").toUpperCase()];
@@ -89,6 +89,7 @@ export async function getHoldings(wallet: string): Promise<Holdings> {
   return {
     tokens,
     totalValue: tokens.reduce((s, t) => s + t.value, 0),
+    unpricedCount: mapped.filter((t) => t.balance > 0 && t.price <= 0).length,
   };
 }
 
