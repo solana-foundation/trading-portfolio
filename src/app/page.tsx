@@ -396,7 +396,6 @@ function Dashboard() {
   const unpricedHeld = (holdings.data?.merged.tokens ?? []).filter(
     (t) => t.balance > 0 && t.price <= 0,
   );
-  const unpricedTrades = trades.filter((t) => t.usd <= 0);
 
   return (
     <div className="wrap">
@@ -503,13 +502,9 @@ function Dashboard() {
                     `${unpricedHeld.length} held (${unpricedHeld
                       .slice(0, 5)
                       .map((t) => t.symbol || shortAddr(t.address))
-                      .join(", ")}${unpricedHeld.length > 5 ? "…" : ""})`}
-                  {unpricedHeld.length > 0 && unpricedTrades.length > 0 && ", "}
-                  {unpricedTrades.length > 0 &&
-                    `${unpricedTrades.length} trades at $0 (no price for that day)`}
-                  {unpricedHeld.length === 0 &&
-                    unpricedTrades.length === 0 &&
-                    "some buys had no historical price and are excluded from cost basis"}
+                      .join(", ")}${unpricedHeld.length > 5 ? "…" : ""}); `}
+                  some events had no day-of price — excluded from cost basis and
+                  trade history, never guessed
                 </span>
               )}
               {pnl.data.historyTruncated && <span className="badge warn">history truncated</span>}
