@@ -80,51 +80,58 @@ async function pricesFor(
     }
   }
 
-  const fetchedSeries = new Map<string, Awaited<ReturnType<typeof getPriceSeries>>>();
-  let next = 0;
-  async function fetchWorker(): Promise<void> {
-    while (next < needFetch.length) {
-      const mint = needFetch[next++];
-      fetchedSeries.set(
-        mint,
-        await getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1),
-      );
-    }
-  }
-  await Promise.all(
-    Array.from(
-      { length: Math.min(PRICE_FETCH_CONCURRENCY, needFetch.length) },
-      () => fetchWorker(),
-    ),
-  );
-
-  const newRows: Array<[string, number, number]> = [];
-  for (const mint of needFetch) {
-    const known = result.get(mint);
-    const fetched = fetchedSeries.get(mint);
-    if (!known || !fetched) continue;
-    for (const [d, p] of fetched) {
-      if (known.has(d) || d < fromDay || d > toDay) continue;
-      known.set(d, p);
-      newRows.push([mint, d, p]);
-    }
-  }
   const INSERT_CHUNK = 5000;
-  for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
-    const chunk = newRows.slice(start, start + INSERT_CHUNK);
-    const values: string[] = [];
-    const params: unknown[] = [];
-    for (const [mint, d, p] of chunk) {
-      params.push(mint, d, p);
-      values.push(
-        `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
+  const FETCH_WAVE = 32;
+  for (let w = 0; w < needFetch.length; w += FETCH_WAVE) {
+    const wave = needFetch.slice(w, w + FETCH_WAVE);
+    const seriesByMint = new Map<
+      string,
+      Awaited<ReturnType<typeof getPriceSeries>>
+    >();
+    let next = 0;
+    async function fetchWorker(): Promise<void> {
+      while (next < wave.length) {
+        const mint = wave[next++];
+        seriesByMint.set(
+          mint,
+          await getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1),
+        );
+      }
+    }
+    await Promise.all(
+      Array.from(
+        { length: Math.min(PRICE_FETCH_CONCURRENCY, wave.length) },
+        () => fetchWorker(),
+      ),
+    );
+
+    const newRows: Array<[string, number, number]> = [];
+    for (const mint of wave) {
+      const known = result.get(mint);
+      const fetched = seriesByMint.get(mint);
+      if (!known || !fetched) continue;
+      for (const [d, p] of fetched) {
+        if (known.has(d) || d < fromDay || d > toDay) continue;
+        known.set(d, p);
+        newRows.push([mint, d, p]);
+      }
+    }
+    for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
+      const chunk = newRows.slice(start, start + INSERT_CHUNK);
+      const values: string[] = [];
+      const params: unknown[] = [];
+      for (const [mint, d, p] of chunk) {
+        params.push(mint, d, p);
+        values.push(
+          `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
+        );
+      }
+      await client.query(
+        `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
+         ON CONFLICT (mint, day) DO NOTHING`,
+        params,
       );
     }
-    await client.query(
-      `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
-       ON CONFLICT (mint, day) DO NOTHING`,
-      params,
-    );
   }
   return result;
 }

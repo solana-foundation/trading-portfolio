@@ -11,16 +11,27 @@
       "refId": "A",
       "datasourceUid": "breeze-gcm",
       "queryType": "timeSeriesList",
-      "relativeTimeRange": { "from": 900, "to": 0 },
+      "relativeTimeRange": {
+        "from": 900,
+        "to": 0
+      },
       "model": {
         "refId": "A",
         "queryType": "timeSeriesList",
         "timeSeriesList": {
           "projectName": "trading-portfolio-104696",
           "filters": [
-            "resource.type", "=", "cloudsql_database", "AND",
-            "resource.label.database_id", "=", "trading-portfolio-104696:trading-portfolio-prd", "AND",
-            "metric.type", "=", "cloudsql.googleapis.com/database/cpu/utilization"
+            "resource.type",
+            "=",
+            "cloudsql_database",
+            "AND",
+            "resource.label.database_id",
+            "=",
+            "trading-portfolio-104696:trading-portfolio-prd",
+            "AND",
+            "metric.type",
+            "=",
+            "cloudsql.googleapis.com/database/cpu/utilization"
           ],
           "alignmentPeriod": "cloud-monitoring-auto",
           "perSeriesAligner": "ALIGN_MEAN",
@@ -33,30 +44,53 @@
       "refId": "B",
       "datasourceUid": "__expr__",
       "queryType": "",
-      "relativeTimeRange": { "from": 0, "to": 0 },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      },
       "model": {
         "type": "reduce",
         "refId": "B",
         "expression": "A",
         "reducer": "last",
-        "settings": { "mode": "replaceNN", "replaceWithValue": 0 }
+        "settings": {
+          "mode": "replaceNN",
+          "replaceWithValue": 0
+        }
       }
     },
     {
       "refId": "C",
       "datasourceUid": "__expr__",
       "queryType": "",
-      "relativeTimeRange": { "from": 0, "to": 0 },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      },
       "model": {
         "type": "threshold",
         "refId": "C",
         "expression": "B",
         "conditions": [
           {
-            "evaluator": { "type": "gt", "params": [0.8] },
-            "operator": { "type": "and" },
-            "query": { "params": ["B"] },
-            "reducer": { "type": "last", "params": [] },
+            "evaluator": {
+              "type": "gt",
+              "params": [
+                0.8
+              ]
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "B"
+              ]
+            },
+            "reducer": {
+              "type": "last",
+              "params": []
+            },
             "type": "query"
           }
         ]
@@ -67,5 +101,11 @@
   "annotations": {
     "summary": "Portfolio Cloud SQL instance CPU has exceeded 80% for 15 minutes."
   },
-  "labels": { "service": "trading-portfolio", "severity": "warning" }
+  "labels": {
+    "service": "trading-portfolio",
+    "severity": "warning"
+  },
+  "notification_settings": {
+    "receiver": "alerts-trading"
+  }
 }
