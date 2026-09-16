@@ -223,12 +223,17 @@ function Dashboard() {
   const connected = publicKey?.toBase58() ?? null;
   const tracked = useTrackedWallets();
 
-  const wallets = useMemo(() => {
+  const allWallets = useMemo(() => {
     const set = new Set<string>();
     if (connected) set.add(connected);
     for (const w of tracked.wallets) set.add(w);
-    return Array.from(set).slice(0, MAX_WALLETS_PER_REQUEST);
+    return Array.from(set);
   }, [connected, tracked.wallets]);
+  const wallets = useMemo(
+    () => allWallets.slice(0, MAX_WALLETS_PER_REQUEST),
+    [allWallets],
+  );
+  const excludedCount = allWallets.length - wallets.length;
 
   const holdings = usePost<HoldingsResponse>("/api/portfolio/holdings", wallets);
   const pnl = usePost<TradePnLResult>("/api/portfolio/pnl", wallets);
@@ -262,10 +267,18 @@ function Dashboard() {
 
       <WalletInput
         tracked={tracked.wallets.filter((w) => w !== connected)}
-        atLimit={wallets.length >= MAX_WALLETS_PER_REQUEST}
+        atLimit={allWallets.length >= MAX_WALLETS_PER_REQUEST}
         onAdd={tracked.add}
         onRemove={tracked.remove}
       />
+
+      {excludedCount > 0 && (
+        <span className="badge warn">
+          {excludedCount} wallet{excludedCount > 1 ? "s" : ""} excluded — results
+          below cover only the first {MAX_WALLETS_PER_REQUEST} wallets (API limit).
+          Remove wallets to include them.
+        </span>
+      )}
 
       {wallets.length === 0 && (
         <p className="muted" style={{ textAlign: "center" }}>
