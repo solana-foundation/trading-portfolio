@@ -47,24 +47,31 @@ async function pricesFor(
   toDay: number,
 ): Promise<Map<string, Map<number, number>>> {
   const result = new Map<string, Map<number, number>>();
-  const needFetch: string[] = [];
+  const lookup: string[] = [];
   for (const mint of mints) {
     if (STABLECOIN_MINTS.has(mint)) {
       const flat = new Map<number, number>();
       for (let d = fromDay; d <= toDay; d += DAY_SECONDS) flat.set(d, 1);
       result.set(mint, flat);
-      continue;
+    } else {
+      result.set(mint, new Map<number, number>());
+      lookup.push(mint);
     }
+  }
+  if (lookup.length > 0) {
     const cached = await client.query(
-      `SELECT extract(epoch FROM day)::bigint AS day_ts, price_usd
+      `SELECT mint, extract(epoch FROM day)::bigint AS day_ts, price_usd
          FROM price_daily
-        WHERE mint = $1 AND day BETWEEN to_timestamp($2)::date AND to_timestamp($3)::date`,
-      [mint, fromDay, toDay],
+        WHERE mint = ANY($1) AND day BETWEEN to_timestamp($2)::date AND to_timestamp($3)::date`,
+      [lookup, fromDay, toDay],
     );
-    const known = new Map<number, number>(
-      cached.rows.map((r) => [Number(r.day_ts), Number(r.price_usd)]),
-    );
-    result.set(mint, known);
+    for (const r of cached.rows) {
+      result.get(r.mint as string)?.set(Number(r.day_ts), Number(r.price_usd));
+    }
+  }
+  const needFetch: string[] = [];
+  for (const mint of lookup) {
+    const known = result.get(mint)!;
     for (let d = fromDay; d <= toDay; d += DAY_SECONDS) {
       if (!known.has(d)) {
         needFetch.push(mint);
@@ -91,27 +98,33 @@ async function pricesFor(
     ),
   );
 
+  const newRows: Array<[string, number, number]> = [];
   for (const mint of needFetch) {
     const known = result.get(mint);
     const fetched = fetchedSeries.get(mint);
     if (!known || !fetched) continue;
-    const values: string[] = [];
-    const params: unknown[] = [mint];
     for (const [d, p] of fetched) {
       if (known.has(d) || d < fromDay || d > toDay) continue;
       known.set(d, p);
-      params.push(d, p);
+      newRows.push([mint, d, p]);
+    }
+  }
+  const INSERT_CHUNK = 5000;
+  for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
+    const chunk = newRows.slice(start, start + INSERT_CHUNK);
+    const values: string[] = [];
+    const params: unknown[] = [];
+    for (const [mint, d, p] of chunk) {
+      params.push(mint, d, p);
       values.push(
-        `($1, to_timestamp($${params.length - 1})::date, $${params.length})`,
+        `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
       );
     }
-    if (values.length > 0) {
-      await client.query(
-        `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
-         ON CONFLICT (mint, day) DO NOTHING`,
-        params,
-      );
-    }
+    await client.query(
+      `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
+       ON CONFLICT (mint, day) DO NOTHING`,
+      params,
+    );
   }
   return result;
 }
