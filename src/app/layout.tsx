@@ -32,18 +32,27 @@ body {
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-input.wallet {
+.wallet {
   width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
-  background: var(--panel-2); color: var(--text); outline: none; font-size: 14px;
+  background: var(--panel-2); color: var(--text); outline: none; font-size: 14px; resize: vertical;
 }
-input.wallet:focus { border-color: var(--accent); }
+.wallet:focus { border-color: var(--accent); }
+.btn {
+  padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger { border-color: rgba(239, 68, 68, 0.5); color: var(--neg); }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
   border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.12);
   color: #c4b5fd; font-size: 12px;
 }
-.chip button { background: none; border: none; color: inherit; cursor: pointer; opacity: 0.6; padding: 0; font-size: 14px; }
+.chip button { background: none; border: none; color: inherit; cursor: pointer; opacity: 0.8; padding: 0; font-size: inherit; }
 .chip button:hover { opacity: 1; }
+button.chip { cursor: pointer; }
+.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
 .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }

@@ -14,6 +14,10 @@ import type {
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const STORAGE_KEY = "mockup-wallets";
+const PORTFOLIOS_KEY = "mockup-portfolios";
+const ACTIVE_PORTFOLIO_KEY = "mockup-active-portfolio";
+
+type Portfolio = { id: string; name: string; wallets: string[] };
 
 type HoldingsResponse = {
   merged: { tokens: TokenHolding[]; totalValue: number };
@@ -90,6 +94,57 @@ function useTrackedWallets() {
     wallets,
     add: (a: string) => save(Array.from(new Set([...wallets, a]))),
     remove: (a: string) => save(wallets.filter((w) => w !== a)),
+  };
+}
+
+function isPortfolio(p: unknown): p is Portfolio {
+  const o = p as Portfolio;
+  return (
+    typeof o === "object" &&
+    o !== null &&
+    typeof o.id === "string" &&
+    typeof o.name === "string" &&
+    Array.isArray(o.wallets) &&
+    o.wallets.every((w) => typeof w === "string" && BASE58_RE.test(w))
+  );
+}
+
+function usePortfolios() {
+  const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
+  const [activeId, setActiveIdState] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PORTFOLIOS_KEY);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) setPortfolios(parsed.filter(isPortfolio));
+      }
+      setActiveIdState(localStorage.getItem(ACTIVE_PORTFOLIO_KEY));
+    } catch {}
+  }, []);
+  const save = (ps: Portfolio[]) => {
+    setPortfolios(ps);
+    try {
+      localStorage.setItem(PORTFOLIOS_KEY, JSON.stringify(ps));
+    } catch {}
+  };
+  const setActiveId = (id: string | null) => {
+    setActiveIdState(id);
+    try {
+      if (id) localStorage.setItem(ACTIVE_PORTFOLIO_KEY, id);
+      else localStorage.removeItem(ACTIVE_PORTFOLIO_KEY);
+    } catch {}
+  };
+  return {
+    portfolios,
+    activeId,
+    active: portfolios.find((p) => p.id === activeId) ?? null,
+    setActiveId,
+    upsert: (p: Portfolio) => {
+      const rest = portfolios.filter((x) => x.id !== p.id);
+      save([...rest, p].sort((a, b) => a.name.localeCompare(b.name)));
+    },
+    remove: (id: string) => save(portfolios.filter((x) => x.id !== id)),
   };
 }
 
@@ -187,6 +242,87 @@ function WalletInput({
   );
 }
 
+function PortfolioEditor({
+  initial,
+  onSave,
+  onDelete,
+  onCancel,
+}: {
+  initial: Portfolio | null;
+  onSave: (p: Portfolio) => void;
+  onDelete: (() => void) | null;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [walletsText, setWalletsText] = useState(
+    (initial?.wallets ?? []).join("\n"),
+  );
+  const [err, setErr] = useState<string | null>(null);
+  const submit = () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setErr("Name the portfolio.");
+      return;
+    }
+    const lines = walletsText
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const bad = lines.find((l) => !BASE58_RE.test(l));
+    if (bad) {
+      setErr(`Not a valid address: ${bad}`);
+      return;
+    }
+    const unique = Array.from(new Set(lines));
+    if (unique.length === 0) {
+      setErr("Add at least one wallet.");
+      return;
+    }
+    if (unique.length > MAX_WALLETS_PER_REQUEST) {
+      setErr(`Max ${MAX_WALLETS_PER_REQUEST} wallets per portfolio.`);
+      return;
+    }
+    onSave({
+      id: initial?.id ?? crypto.randomUUID(),
+      name: trimmed,
+      wallets: unique,
+    });
+  };
+  return (
+    <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <h2>{initial ? "Edit portfolio" : "New portfolio"}</h2>
+      <input
+        className="wallet"
+        type="text"
+        value={name}
+        placeholder="Portfolio name"
+        onChange={(e) => setName(e.target.value)}
+      />
+      <textarea
+        className="wallet mono"
+        rows={5}
+        value={walletsText}
+        placeholder="Wallet addresses, one per line"
+        onChange={(e) => setWalletsText(e.target.value)}
+      />
+      {err && <p className="neg" style={{ margin: 0, fontSize: 12 }}>{err}</p>}
+      <div className="row">
+        <button type="button" className="btn primary" onClick={submit}>
+          Save
+        </button>
+        <button type="button" className="btn" onClick={onCancel}>
+          Cancel
+        </button>
+        {onDelete && (
+          <button type="button" className="btn danger" onClick={onDelete}>
+            Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ValueChart({ history }: { history: ValueHistoryResponse }) {
   const points = [...history.series];
   if (points.length === 0) return null;
@@ -222,13 +358,16 @@ function Dashboard() {
   const { publicKey } = useWallet();
   const connected = publicKey?.toBase58() ?? null;
   const tracked = useTrackedWallets();
+  const folios = usePortfolios();
+  const [editing, setEditing] = useState<"new" | Portfolio | null>(null);
 
   const allWallets = useMemo(() => {
+    if (folios.active) return folios.active.wallets;
     const set = new Set<string>();
     if (connected) set.add(connected);
     for (const w of tracked.wallets) set.add(w);
     return Array.from(set);
-  }, [connected, tracked.wallets]);
+  }, [connected, tracked.wallets, folios.active]);
   const wallets = useMemo(
     () => allWallets.slice(0, MAX_WALLETS_PER_REQUEST),
     [allWallets],
@@ -254,23 +393,72 @@ function Dashboard() {
 
   const summary = pnl.data?.summary ?? null;
   const trades = pnl.data?.tradeHistory ?? [];
+  const unpricedHeld = (holdings.data?.merged.tokens ?? []).filter(
+    (t) => t.balance > 0 && t.price <= 0,
+  );
+  const unpricedTrades = trades.filter((t) => t.usd <= 0);
 
   return (
     <div className="wrap">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <div>
-          <strong style={{ fontSize: 18 }}>Portfolio Mockup</strong>{" "}
-          <span className="badge">throwaway</span>
+          <strong style={{ fontSize: 18 }}>Portfolio Mockup</strong>
         </div>
         <UnifiedWalletButton />
       </div>
 
-      <WalletInput
-        tracked={tracked.wallets.filter((w) => w !== connected)}
-        atLimit={allWallets.length >= MAX_WALLETS_PER_REQUEST}
-        onAdd={tracked.add}
-        onRemove={tracked.remove}
-      />
+      <div className="row">
+        <button
+          type="button"
+          className={`chip${folios.active ? "" : " active"}`}
+          onClick={() => folios.setActiveId(null)}
+        >
+          All wallets
+        </button>
+        {folios.portfolios.map((p) => (
+          <span key={p.id} className={`chip${folios.activeId === p.id ? " active" : ""}`}>
+            <button type="button" onClick={() => folios.setActiveId(p.id)}>
+              {p.name} ({p.wallets.length})
+            </button>
+            <button type="button" title="Edit" onClick={() => setEditing(p)}>
+              ✎
+            </button>
+          </span>
+        ))}
+        <button type="button" className="chip" onClick={() => setEditing("new")}>
+          ＋ New portfolio
+        </button>
+      </div>
+
+      {editing && (
+        <PortfolioEditor
+          initial={editing === "new" ? null : editing}
+          onSave={(p) => {
+            folios.upsert(p);
+            folios.setActiveId(p.id);
+            setEditing(null);
+          }}
+          onDelete={
+            editing === "new"
+              ? null
+              : () => {
+                  folios.remove(editing.id);
+                  if (folios.activeId === editing.id) folios.setActiveId(null);
+                  setEditing(null);
+                }
+          }
+          onCancel={() => setEditing(null)}
+        />
+      )}
+
+      {!folios.active && (
+        <WalletInput
+          tracked={tracked.wallets.filter((w) => w !== connected)}
+          atLimit={allWallets.length >= MAX_WALLETS_PER_REQUEST}
+          onAdd={tracked.add}
+          onRemove={tracked.remove}
+        />
+      )}
 
       {excludedCount > 0 && (
         <span className="badge warn">
@@ -304,17 +492,26 @@ function Dashboard() {
                 <span style={{ fontSize: 13 }}>{fmtPct(summary?.absoluteReturnPct)}</span>
               </div>
             </div>
-            <div className="stat">
-              <div className="label">XIRR</div>
-              <div className={`value ${signClass(summary?.xirrPct)}`}>
-                {fmtPct(summary?.xirrPct)}
-              </div>
-            </div>
           </div>
 
           {(pnl.data?.hasUnpriced || pnl.data?.historyTruncated) && (
             <div className="row">
-              {pnl.data.hasUnpriced && <span className="badge warn">has unpriced tokens</span>}
+              {pnl.data.hasUnpriced && (
+                <span className="badge warn">
+                  unpriced:{" "}
+                  {unpricedHeld.length > 0 &&
+                    `${unpricedHeld.length} held (${unpricedHeld
+                      .slice(0, 5)
+                      .map((t) => t.symbol || shortAddr(t.address))
+                      .join(", ")}${unpricedHeld.length > 5 ? "…" : ""})`}
+                  {unpricedHeld.length > 0 && unpricedTrades.length > 0 && ", "}
+                  {unpricedTrades.length > 0 &&
+                    `${unpricedTrades.length} trades at $0 (no price for that day)`}
+                  {unpricedHeld.length === 0 &&
+                    unpricedTrades.length === 0 &&
+                    "some buys had no historical price and are excluded from cost basis"}
+                </span>
+              )}
               {pnl.data.historyTruncated && <span className="badge warn">history truncated</span>}
             </div>
           )}
@@ -351,7 +548,13 @@ function Dashboard() {
                           </span>
                         </td>
                         <td className="mono">{fmtAmt(t.balance)}</td>
-                        <td className="mono">{fmtUsd(t.price)}</td>
+                        <td className="mono">
+                          {t.price > 0 ? (
+                            fmtUsd(t.price)
+                          ) : (
+                            <span className="badge warn">unpriced</span>
+                          )}
+                        </td>
                         <td className="mono">{fmtUsd(t.value)}</td>
                         <td className="mono muted">{p ? fmtUsd(p.costBasis) : "—"}</td>
                         <td className={`mono ${signClass(p?.pnl)}`}>
@@ -396,7 +599,7 @@ function Dashboard() {
                       <td>
                         {t.signature ? (
                           <a
-                            href={`https://solscan.io/tx/${t.signature}`}
+                            href={`https://explorer.solana.com/tx/${t.signature}`}
                             target="_blank"
                             rel="noreferrer"
                           >
