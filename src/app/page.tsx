@@ -333,7 +333,7 @@ function ValueChart({ history }: { history: ValueHistoryResponse }) {
   const [range, setRange] = useState<[number, number] | null>(null);
   useEffect(() => {
     setRange(null);
-  }, [points.length]);
+  }, [history]);
   if (points.length === 0) return null;
   const [from, to] = range ?? [0, last];
   const lo = Math.max(0, Math.min(from, to));
@@ -554,7 +554,8 @@ function Dashboard() {
                       .slice(0, 5)
                       .map((t) => t.symbol || shortAddr(t.address))
                       .join(", ")}${unpricedHeld.length > 5 ? "…" : ""}); `}
-                  some events had no day-of price — excluded from cost basis and
+                  some events couldn&apos;t be valued (no day-of price, or an
+                  ambiguous multi-token swap) — excluded from cost basis and
                   trade history, never guessed
                 </span>
               )}
@@ -564,8 +565,9 @@ function Dashboard() {
 
           {history.loading && (
             <p className="muted" style={{ fontSize: 12 }}>
-              Building value history — the first load for a new wallet computes
-              its full daily series and can take a while…
+              Loading value history… (a wallet seen for the first time gets its
+              full daily series built now, which can take a while; known wallets
+              only top up recent days)
             </p>
           )}
           {history.data && <ValueChart history={history.data} />}
