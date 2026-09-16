@@ -28,6 +28,10 @@ type ValueHistoryResponse = {
   todayValueUsd: number;
   partial: boolean;
   hasUnpricedDays: boolean;
+  wallets: Record<
+    string,
+    { genesisDay: string | null; backfilledNow: boolean; truncated: boolean }
+  >;
 };
 
 type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
@@ -324,32 +328,79 @@ function PortfolioEditor({
 }
 
 function ValueChart({ history }: { history: ValueHistoryResponse }) {
-  const points = [...history.series];
+  const points = history.series;
+  const last = points.length - 1;
+  const [range, setRange] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    setRange(null);
+  }, [points.length]);
   if (points.length === 0) return null;
+  const [from, to] = range ?? [0, last];
+  const lo = Math.max(0, Math.min(from, to));
+  const hi = Math.min(last, Math.max(from, to, lo + 1));
+  const view = points.slice(lo, hi + 1);
+  const justBuilt = Object.values(history.wallets ?? {}).filter(
+    (m) => m.backfilledNow,
+  ).length;
   const w = 800;
   const h = 160;
-  const values = points.map((p) => p.valueUsd);
+  const values = view.map((p) => p.valueUsd);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
-  const x = (i: number) => (points.length === 1 ? w / 2 : (i / (points.length - 1)) * w);
+  const x = (i: number) => (view.length === 1 ? w / 2 : (i / (view.length - 1)) * w);
   const y = (v: number) => h - ((v - min) / span) * (h - 16) - 8;
-  const path = points.map((p, i) => `${x(i)},${y(p.valueUsd)}`).join(" ");
+  const path = view.map((p, i) => `${x(i)},${y(p.valueUsd)}`).join(" ");
   return (
     <div className="panel">
       <h2>
         Value history{" "}
         {history.partial && <span className="badge warn">partial</span>}{" "}
-        {history.hasUnpricedDays && <span className="badge warn">unpriced days</span>}
+        {history.hasUnpricedDays && <span className="badge warn">unpriced days</span>}{" "}
+        {justBuilt > 0 && (
+          <span className="badge">
+            history just built for {justBuilt} wallet{justBuilt > 1 ? "s" : ""}
+          </span>
+        )}
       </h2>
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none">
         <polyline points={path} fill="none" stroke="#8b5cf6" strokeWidth="2" />
       </svg>
       <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
-        <span className="muted">{points[0].day}</span>
+        <span className="muted">{view[0].day}</span>
         <span>Today: {fmtUsd(history.todayValueUsd)}</span>
-        <span className="muted">{points[points.length - 1].day}</span>
+        <span className="muted">{view[view.length - 1].day}</span>
       </div>
+      {last > 1 && (
+        <div style={{ marginTop: 10 }}>
+          <input
+            type="range"
+            min={0}
+            max={last - 1}
+            value={lo}
+            style={{ width: "100%" }}
+            onChange={(e) => setRange([Number(e.target.value), hi])}
+          />
+          <input
+            type="range"
+            min={1}
+            max={last}
+            value={hi}
+            style={{ width: "100%" }}
+            onChange={(e) => setRange([lo, Number(e.target.value)])}
+          />
+          <div className="row" style={{ justifyContent: "space-between", fontSize: 11 }}>
+            <span className="muted">
+              slide to pan — full range {points[0].day} → {points[last].day}
+            </span>
+            {range && (
+              <button type="button" className="btn" onClick={() => setRange(null)}>
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -511,6 +562,12 @@ function Dashboard() {
             </div>
           )}
 
+          {history.loading && (
+            <p className="muted" style={{ fontSize: 12 }}>
+              Building value history — the first load for a new wallet computes
+              its full daily series and can take a while…
+            </p>
+          )}
           {history.data && <ValueChart history={history.data} />}
           {history.error && (
             <p className="muted" style={{ fontSize: 12 }}>Value history: {history.error}</p>
