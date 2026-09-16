@@ -152,7 +152,11 @@ jobs:
         run: |
           set -euo pipefail
           URL=$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --project=${{ vars.GCP_PROJECT }} --format='value(status.url)')
-          AUTH_TOKEN=$(gcloud auth print-identity-token --impersonate-service-account=${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }} --audiences="$URL" --include-email)
+          AUTH_TOKEN=$(curl -sS --fail-with-body -X POST \
+            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }}:generateIdToken" \
+            -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+            -H 'Content-Type: application/json' \
+            -d "{\"audience\":\"$URL\",\"includeEmail\":true}" | jq -r .token)
           echo "::add-mask::$AUTH_TOKEN"
           REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
           export AUTH_TOKEN REQUIRE_DATA
