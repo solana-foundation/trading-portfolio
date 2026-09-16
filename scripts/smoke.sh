@@ -40,4 +40,21 @@ for ep in summary holdings pnl trades; do
   esac
 done
 
+if [ -n "${DEFI_GAP_WALLETS:-}" ]; then
+  if [ -n "${HELIUS_API_KEY:-}" ] || [ -n "${RPC_URL:-}" ]; then
+    if [ "${DEFI_GAPS_STRICT:-false}" = "true" ]; then
+      echo "defi gap report (strict):"
+      node "$(dirname "$0")/defi-gaps.mjs" report "$BASE_URL" \
+        $(echo "$DEFI_GAP_WALLETS" | tr ',' ' ') \
+        || fail "defi gap report found gaps"
+    else
+      echo "defi gap report (informational):"
+      node "$(dirname "$0")/defi-gaps.mjs" report "$BASE_URL" \
+        $(echo "$DEFI_GAP_WALLETS" | tr ',' ' ') || true
+    fi
+  else
+    echo "defi gap report skipped: no HELIUS_API_KEY/RPC_URL"
+  fi
+fi
+
 echo "SMOKE OK"
