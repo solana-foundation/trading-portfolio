@@ -75,3 +75,9 @@ resource "google_service_account_iam_member" "cloudrun_deployer_token_creator" {
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.ref/refs/heads/main"
 }
+
+resource "google_service_account_iam_member" "cloudrun_deployer_self_token_creator" {
+  service_account_id = google_service_account.cloudrun_deployer.name
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  member             = "serviceAccount:${google_service_account.cloudrun_deployer.email}"
+}
