@@ -67,14 +67,19 @@ Request: `{"wallets": ["..."]}`
         { "address": "<mint>", "symbol": "SOL", "name": "Solana",
           "icon": "https://…", "balance": 1.5, "price": 261.4, "value": 392.1 }
       ],
-      "totalValue": 392.1
+      "totalValue": 392.1,
+      "unpricedCount": 3
     }
   },
-  "merged": { "tokens": [ /* same shape, summed across wallets */ ], "totalValue": 392.1 }
+  "merged": { "tokens": [ /* same shape, summed across wallets */ ], "totalValue": 392.1, "unpricedCount": 3 }
 }
 ```
 
-Dust below $0.01 is dropped; `price: 0` means the vendor has no current price (value counts as 0 and the token is unpriced, not hidden).
+Token rows exclude dust below $0.01 and tokens the vendor cannot price
+(their value computes to 0, and unpriced spam would otherwise dominate the
+list). Those excluded-but-held tokens are counted in `unpricedCount` per
+wallet and on `merged`, and any nonzero count raises `hasUnpriced` on
+`/pnl` — dropped rows are countable, never invisible.
 
 ### `POST /api/portfolio/pnl`
 
@@ -110,7 +115,8 @@ Request: `{"wallets": ["..."]}`
 ```
 
 Per-asset rows are basis-gated: a held token with no priceable acquisition
-history gets no row (and raises `hasUnpriced`) instead of a guessed basis.
+history (e.g. an airdrop) gets no row and raises `hasUnpriced` instead of a
+guessed basis.
 `netWorthUsd`/`summary.currentValue` still count every held token.
 
 ### `POST /api/portfolio/trades`
