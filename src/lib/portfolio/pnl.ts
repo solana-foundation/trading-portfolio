@@ -50,12 +50,13 @@ export function coveredCostBasis(
   balance: number,
   totalSpent: number,
   totalBought: number,
+  poolLimit = Number.POSITIVE_INFINITY,
 ): { coveredAmount: number; avgCostPerToken: number; costBasis: number } {
-  if (totalSpent <= 0 || totalBought <= 0 || balance <= 0) {
+  if (totalSpent <= 0 || totalBought <= 0 || balance <= 0 || poolLimit <= 0) {
     return { coveredAmount: 0, avgCostPerToken: 0, costBasis: 0 };
   }
   const avgCostPerToken = totalSpent / totalBought;
-  const coveredAmount = Math.min(balance, totalBought);
+  const coveredAmount = Math.min(balance, totalBought, poolLimit);
   return {
     coveredAmount,
     avgCostPerToken,
@@ -324,7 +325,30 @@ export async function getAggregateTradePnL(
   let totalCostBasis = 0;
   let totalValue = 0;
 
+  const boughtPool = new Map<string, number>();
+  for (const [mint, m] of byMint.entries()) boughtPool.set(mint, m.totalBought);
   for (let i = 0; i < wallets.length; i++) {
+    for (const t of holdings[i]?.tokens || []) {
+      const bal = t.balance || 0;
+      if (bal <= 0 || isExcludedMint(t.address)) continue;
+      const own = perWalletByMint[i].get(t.address);
+      if (!own || own.totalSpent <= 0 || own.totalBought <= 0) continue;
+      const reserved = coveredCostBasis(
+        bal,
+        own.totalSpent,
+        own.totalBought,
+      ).coveredAmount;
+      boughtPool.set(
+        t.address,
+        Math.max(0, (boughtPool.get(t.address) ?? 0) - reserved),
+      );
+    }
+  }
+  const walletOrder = wallets
+    .map((_, i) => i)
+    .sort((a, b) => wallets[a].localeCompare(wallets[b]));
+
+  for (const i of walletOrder) {
     const w = wallets[i];
     const rows: TradePnLRow[] = [];
     for (const t of holdings[i]?.tokens || []) {
@@ -340,24 +364,31 @@ export async function getAggregateTradePnL(
       const ownUsable = own && own.totalSpent > 0 && own.totalBought > 0;
       const hhUsable = hh && hh.totalSpent > 0 && hh.totalBought > 0;
       if (!ownUsable && !hhUsable) continue;
-      const preferOwn =
-        ownUsable &&
-        (!hhUsable ||
-          Math.min(bal, own.totalBought) >= Math.min(bal, hh.totalBought));
-      const totalSpent = preferOwn ? own!.totalSpent : hh!.totalSpent;
-      const totalBought = preferOwn ? own!.totalBought : hh!.totalBought;
-      const sourcesSet = preferOwn ? own!.sources : hh!.sources;
-      const attribution: "wallet" | "household" = preferOwn
-        ? "wallet"
-        : "household";
 
-      const { coveredAmount, avgCostPerToken, costBasis } = coveredCostBasis(
-        bal,
-        totalSpent,
-        totalBought,
-      );
-      if (bal > totalBought * COVERAGE_TOLERANCE) hasUnpriced = true;
-      const perTokenCost = avgCostPerToken;
+      const ownPart = ownUsable
+        ? coveredCostBasis(bal, own!.totalSpent, own!.totalBought)
+        : { coveredAmount: 0, avgCostPerToken: 0, costBasis: 0 };
+      const poolLeft = Math.max(0, boughtPool.get(t.address) ?? 0);
+      const hhPart = hhUsable
+        ? coveredCostBasis(
+            bal - ownPart.coveredAmount,
+            hh!.totalSpent,
+            hh!.totalBought,
+            poolLeft,
+          )
+        : { coveredAmount: 0, avgCostPerToken: 0, costBasis: 0 };
+      const coveredAmount = ownPart.coveredAmount + hhPart.coveredAmount;
+      if (bal > coveredAmount * COVERAGE_TOLERANCE) hasUnpriced = true;
+      if (coveredAmount <= 0) continue;
+      if (hhPart.coveredAmount > 0) {
+        boughtPool.set(t.address, poolLeft - hhPart.coveredAmount);
+      }
+      const costBasis = ownPart.costBasis + hhPart.costBasis;
+      const attribution: "wallet" | "household" =
+        hhPart.coveredAmount > 0 ? "household" : "wallet";
+      const sourcesSet =
+        hhPart.coveredAmount > 0 ? hh!.sources : own!.sources;
+      const perTokenCost = costBasis / coveredAmount;
       const currentPrice = t.price || hh?.price || 0;
       const currentValue = bal * currentPrice;
       const amountSpent = costBasis;

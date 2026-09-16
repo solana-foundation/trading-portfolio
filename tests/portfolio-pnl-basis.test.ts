@@ -22,6 +22,16 @@ describe("coveredCostBasis", () => {
     expect(r.costBasis).toBeCloseTo(700);
   });
 
+  it("caps coverage at the remaining household pool", () => {
+    const first = coveredCostBasis(60, 200, 100, 100);
+    expect(first.coveredAmount).toBe(60);
+    expect(first.costBasis).toBeCloseTo(120);
+    const second = coveredCostBasis(60, 200, 100, 100 - first.coveredAmount);
+    expect(second.coveredAmount).toBe(40);
+    expect(second.costBasis).toBeCloseTo(80);
+    expect(coveredCostBasis(60, 200, 100, 0).coveredAmount).toBe(0);
+  });
+
   it("returns zeros without tracked buys or spend", () => {
     expect(coveredCostBasis(10, 0, 5)).toEqual({
       coveredAmount: 0,

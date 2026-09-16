@@ -5,6 +5,7 @@ import type { HeliusTx } from "@/lib/portfolio/swaps";
 const PAGE_SIZE = 100;
 const DEFAULT_MAX_PAGES = 20;
 const MAX_TOKEN_ACCOUNTS = 32;
+const ACCOUNT_FETCH_CONCURRENCY = 8;
 
 const TOKEN_PROGRAM_IDS = [
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
@@ -179,6 +180,32 @@ async function getTokenAccounts(wallet: string): Promise<string[]> {
   return out;
 }
 
+async function fetchAddressesBounded(
+  addresses: string[],
+  maxPages: number,
+): Promise<TxFetchResult[]> {
+  const results: TxFetchResult[] = new Array(addresses.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < addresses.length) {
+      const i = next++;
+      try {
+        results[i] = await fetchForAddress(addresses[i], maxPages);
+      } catch (e) {
+        if (e instanceof ProviderAuthError) throw e;
+        results[i] = await fetchForAddress(addresses[i], maxPages);
+      }
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(ACCOUNT_FETCH_CONCURRENCY, addresses.length) },
+      () => worker(),
+    ),
+  );
+  return results;
+}
+
 export async function fetchTransactions(
   wallet: string,
   maxPages = DEFAULT_MAX_PAGES,
@@ -188,12 +215,12 @@ export async function fetchTransactions(
 
   const owner = await fetchForAddress(wallet, maxPages);
 
+  const accountsEnumerable = Boolean(process.env.HELIUS_API_KEY);
   const tokenAccounts = await getTokenAccounts(wallet);
   const capped = tokenAccounts.length > MAX_TOKEN_ACCOUNTS;
-  const accountResults = await Promise.all(
-    tokenAccounts
-      .slice(0, MAX_TOKEN_ACCOUNTS)
-      .map((a) => fetchForAddress(a, maxPages)),
+  const accountResults = await fetchAddressesBounded(
+    tokenAccounts.slice(0, MAX_TOKEN_ACCOUNTS),
+    maxPages,
   );
 
   const merged = new Map<string, HeliusTx>();
@@ -212,7 +239,10 @@ export async function fetchTransactions(
   const result: TxFetchResult = {
     txs,
     truncated:
-      owner.truncated || capped || accountResults.some((r) => r.truncated),
+      owner.truncated ||
+      capped ||
+      !accountsEnumerable ||
+      accountResults.some((r) => r.truncated),
   };
   txCache.set(wallet, result);
   return result;
