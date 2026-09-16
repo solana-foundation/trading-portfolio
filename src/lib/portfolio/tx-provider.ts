@@ -4,7 +4,7 @@ import type { HeliusTx } from "@/lib/portfolio/swaps";
 
 const PAGE_SIZE = 100;
 const DEFAULT_MAX_PAGES = 20;
-const MAX_TOKEN_ACCOUNTS = 32;
+const MAX_TOKEN_ACCOUNTS = 128;
 const ACCOUNT_FETCH_CONCURRENCY = 8;
 
 const TOKEN_PROGRAM_IDS = [
