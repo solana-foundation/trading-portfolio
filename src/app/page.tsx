@@ -6,6 +6,7 @@ import {
   UnifiedWalletProvider,
   useWallet,
 } from "@jup-ag/wallet-adapter";
+import { MAX_WALLETS_PER_REQUEST } from "@/lib/portfolio/request";
 import type {
   TokenHolding,
   TradePnLResult,
@@ -67,7 +68,16 @@ function useTrackedWallets() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setWallets(JSON.parse(raw) as string[]);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setWallets(
+            parsed.filter(
+              (w): w is string => typeof w === "string" && BASE58_RE.test(w),
+            ),
+          );
+        }
+      }
     } catch {}
   }, []);
   const save = (ws: string[]) => {
@@ -112,10 +122,12 @@ function signClass(n: number | null | undefined): string {
 
 function WalletInput({
   tracked,
+  atLimit,
   onAdd,
   onRemove,
 }: {
   tracked: string[];
+  atLimit: boolean;
   onAdd: (a: string) => void;
   onRemove: (a: string) => void;
 }) {
@@ -126,6 +138,10 @@ function WalletInput({
     if (!s) return;
     if (!BASE58_RE.test(s)) {
       setErr("Not a valid base58 wallet address.");
+      return;
+    }
+    if (atLimit && !tracked.includes(s)) {
+      setErr(`Wallet limit reached (${MAX_WALLETS_PER_REQUEST}). Remove one first.`);
       return;
     }
     setErr(null);
@@ -211,7 +227,7 @@ function Dashboard() {
     const set = new Set<string>();
     if (connected) set.add(connected);
     for (const w of tracked.wallets) set.add(w);
-    return Array.from(set);
+    return Array.from(set).slice(0, MAX_WALLETS_PER_REQUEST);
   }, [connected, tracked.wallets]);
 
   const holdings = usePost<HoldingsResponse>("/api/portfolio/holdings", wallets);
@@ -246,6 +262,7 @@ function Dashboard() {
 
       <WalletInput
         tracked={tracked.wallets.filter((w) => w !== connected)}
+        atLimit={wallets.length >= MAX_WALLETS_PER_REQUEST}
         onAdd={tracked.add}
         onRemove={tracked.remove}
       />
@@ -317,7 +334,6 @@ function Dashboard() {
                       <tr key={t.address}>
                         <td>
                           <span className="token">
-                            {t.icon && <img src={t.icon} alt="" />}
                             <span>{t.symbol || shortAddr(t.address)}</span>
                           </span>
                         </td>
