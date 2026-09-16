@@ -24,7 +24,7 @@ export async function POST(request: Request) {
           merged.set(t.address, { ...t });
         } else {
           existing.balance += t.balance;
-          existing.value += t.value;
+          if (!existing.price && t.price) existing.price = t.price;
           if (!existing.symbol) existing.symbol = t.symbol;
           if (!existing.icon) existing.icon = t.icon;
         }
@@ -32,8 +32,9 @@ export async function POST(request: Request) {
     }
     const mergedTokens: TokenHolding[] = Array.from(merged.values())
       .map(({ hidden: _prior, ...rest }) => {
-        const hidden = classifyHolding(rest);
-        return hidden ? { ...rest, hidden } : rest;
+        const token = { ...rest, value: rest.balance * rest.price };
+        const hidden = classifyHolding(token);
+        return hidden ? { ...token, hidden } : token;
       })
       .sort((a, b) => b.value - a.value);
     const mergedVisible = mergedTokens.filter((t) => !t.hidden);
