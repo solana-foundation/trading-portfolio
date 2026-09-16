@@ -1,7 +1,7 @@
 import { TtlCache } from "@/lib/portfolio/cache";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
 import { SOL_MINT } from "@/lib/portfolio/swaps";
-import type { Holdings, TokenHolding } from "@/lib/portfolio/types";
+import type { HiddenReason, Holdings, TokenHolding } from "@/lib/portfolio/types";
 
 const NATIVE_SOL = "11111111111111111111111111111111";
 
@@ -69,32 +69,42 @@ export async function getRawBalances(
 export async function getHoldings(wallet: string): Promise<Holdings> {
   const items = await getTokenList(wallet);
 
-  const mapped: TokenHolding[] = items.map((t) => ({
-    symbol: t.symbol,
-    name: t.name,
-    balance: t.uiAmount || 0,
-    price: t.priceUsd || 0,
-    value: (t.uiAmount || 0) * (t.priceUsd || 0),
-    icon: t.logoURI,
-    address: t.address === NATIVE_SOL ? SOL_MINT : t.address,
-  }));
-  const tokens = mapped
-    .filter((t) => t.value > DUST_THRESHOLD_USD)
-    .filter((t) => {
-      const canonical = CANONICAL_MINTS[(t.symbol || "").toUpperCase()];
-      return !canonical || canonical === t.address;
+  const tokens: TokenHolding[] = items
+    .map((t) => ({
+      symbol: t.symbol,
+      name: t.name,
+      balance: t.uiAmount || 0,
+      price: t.priceUsd || 0,
+      value: (t.uiAmount || 0) * (t.priceUsd || 0),
+      icon: t.logoURI,
+      address: t.address === NATIVE_SOL ? SOL_MINT : t.address,
+    }))
+    .map((t) => {
+      const hidden = classifyHolding(t);
+      return hidden ? { ...t, hidden } : t;
     })
     .sort((a, b) => b.value - a.value);
 
-  const unpricedMints = mapped
-    .filter((t) => t.balance > 0 && t.price <= 0)
+  const visible = tokens.filter((t) => !t.hidden);
+  const unpricedMints = tokens
+    .filter((t) => t.hidden === "unpriced")
     .map((t) => t.address);
   return {
     tokens,
-    totalValue: tokens.reduce((s, t) => s + t.value, 0),
+    totalValue: visible.reduce((s, t) => s + t.value, 0),
     unpricedCount: unpricedMints.length,
     unpricedMints,
   };
+}
+
+export function classifyHolding(
+  t: Pick<TokenHolding, "address" | "symbol" | "balance" | "price" | "value">,
+): HiddenReason | undefined {
+  const canonical = CANONICAL_MINTS[(t.symbol || "").toUpperCase()];
+  if (canonical && canonical !== t.address) return "impostor";
+  if (t.balance > 0 && t.price <= 0) return "unpriced";
+  if (t.value <= DUST_THRESHOLD_USD) return "dust";
+  return undefined;
 }
 
 export async function getHistoricalPrice(

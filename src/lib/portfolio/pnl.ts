@@ -29,6 +29,7 @@ export function tradeSortKey(t: TradeHistoryRow): string {
 }
 
 const TRANSFER_ALLOWED_TX_TYPES = new Set(["TRANSFER", "SWAP", "UNKNOWN"]);
+const XIRR_MIN_WINDOW_SECONDS = 7 * 86400;
 
 function deriveSolPriceFromHoldings(holdingsList: Holdings[]): number {
   for (const h of holdingsList) {
@@ -225,6 +226,7 @@ export async function getAggregateTradePnL(
   const heldMintsPerWallet = wallets.map(() => new Set<string>());
   for (let i = 0; i < wallets.length; i++) {
     for (const t of holdings[i]?.tokens || []) {
+      if (t.hidden) continue;
       if (isExcludedMint(t.address)) continue;
       if ((t.balance || 0) > 0) heldMintsPerWallet[i].add(t.address);
 
@@ -333,6 +335,7 @@ export async function getAggregateTradePnL(
     for (const t of holdings[i]?.tokens || []) {
       const bal = t.balance || 0;
       if (bal <= 0 || isExcludedMint(t.address)) continue;
+      if (t.hidden) continue;
       const own = perWalletByMint[i].get(t.address);
       if (!own || own.totalSpent <= 0 || own.totalBought <= 0) continue;
       const reserved = coveredCostBasis(
@@ -354,6 +357,7 @@ export async function getAggregateTradePnL(
     const w = wallets[i];
     const rows: TradePnLRow[] = [];
     for (const t of holdings[i]?.tokens || []) {
+      if (t.hidden) continue;
       const bal = t.balance || 0;
       if (bal <= 0) continue;
 
@@ -491,6 +495,7 @@ export async function getAggregateTradePnL(
   const extPriceMap = new Map<string, number | null>(extPriceLookups);
 
   const cashflowEvents: Cashflow[] = [];
+  let unpricedCashflowCount = 0;
   for (const ev of externalEvents) {
     let usd = 0;
     if (STABLECOIN_MINTS.has(ev.mint)) {
@@ -498,7 +503,11 @@ export async function getAggregateTradePnL(
     } else {
       const day = Math.floor(ev.ts / 86400) * 86400;
       const p = extPriceMap.get(`${ev.mint}:${day}`);
-      if (!p || p <= 0) continue;
+      if (!p || p <= 0) {
+        unpricedCashflowCount += 1;
+        hasUnpriced = true;
+        continue;
+      }
       usd = ev.amount * p;
     }
     if (usd <= 0) continue;
@@ -514,20 +523,25 @@ export async function getAggregateTradePnL(
     (s, c) => s + (c.amount > 0 ? c.amount : 0),
     0,
   );
-  const absoluteReturnUsd = totalValue - investedDisplay;
+  const absoluteReturnUsd = totalPnL;
   const absoluteReturnPct =
-    investedDisplay > 0 ? (absoluteReturnUsd / investedDisplay) * 100 : null;
+    totalCostBasis > 0 ? (totalPnL / totalCostBasis) * 100 : null;
 
   const nowTs = Math.floor(Date.now() / 1000);
+  const firstCashflowTs = cashflowEvents.reduce(
+    (min, c) => Math.min(min, c.ts),
+    nowTs,
+  );
+  const xirrReliable =
+    !historyTruncated && nowTs - firstCashflowTs >= XIRR_MIN_WINDOW_SECONDS;
   const terminalValue = netWorthUsd ?? totalValue;
-  const xirrRate = computeXIRR([
-    ...cashflowEvents,
-    { ts: nowTs, amount: terminalValue },
-  ]);
+  const xirrRate = xirrReliable
+    ? computeXIRR([...cashflowEvents, { ts: nowTs, amount: terminalValue }])
+    : null;
   const xirrPct = xirrRate != null ? xirrRate * 100 : null;
 
   let benchmarkSolXirrPct: number | null = null;
-  if (cashflowEvents.length > 0 && solPriceUsd > 0) {
+  if (xirrReliable && cashflowEvents.length > 0 && solPriceUsd > 0) {
     const solQueries = new Set(
       cashflowEvents.map((c) => Math.floor(c.ts / 86400) * 86400),
     );
@@ -567,6 +581,7 @@ export async function getAggregateTradePnL(
     xirrPct,
     benchmarkSolXirrPct,
     cashflowCount: cashflowEvents.length,
+    unpricedCashflowCount,
   };
 
   const symbolFor = (mint: string): string | null => {
