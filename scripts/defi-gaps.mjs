@@ -42,8 +42,15 @@ const INFRA_PROGRAMS = new Set([
   "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
   "jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu",
   "AddressLookupTab1e1111111111111111111111111",
-  ...REGISTRY.map((p) => p.program),
 ]);
+
+const NFT_SCAN_CAP = 100;
+
+function hasDetector(proto) {
+  if (proto.kind === "owner-account") return proto.ownerOffset != null;
+  if (proto.kind === "position-nft") return true;
+  return Boolean(proto.mints);
+}
 
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -99,12 +106,10 @@ async function scanWallet(wallet) {
 
   const findings = [];
   const claimedNfts = new Set();
+  const scannedNfts = nftMints.slice(0, NFT_SCAN_CAP);
   for (const proto of REGISTRY) {
     if (proto.kind === "owner-account") {
-      if (proto.ownerOffset == null) {
-        findings.push({ protocol: proto.name, status: "detector-missing" });
-        continue;
-      }
+      if (proto.ownerOffset == null) continue;
       const res = await rpc("getProgramAccounts", [
         proto.program,
         {
@@ -118,7 +123,7 @@ async function scanWallet(wallet) {
       }
     } else if (proto.kind === "position-nft") {
       let count = 0;
-      for (const mint of nftMints.slice(0, 40)) {
+      for (const mint of scannedNfts) {
         const res = await rpc("getProgramAccounts", [
           proto.program,
           {
@@ -143,31 +148,59 @@ async function scanWallet(wallet) {
     }
   }
 
-  const unknownNfts = nftMints.filter((m) => !claimedNfts.has(m));
+  const unknownNfts = scannedNfts.filter((m) => !claimedNfts.has(m));
   if (unknownNfts.length > 0) {
     findings.push({
       protocol: "unknown",
-      status: "unknown-nft",
+      status: "unmatched-nft",
       count: unknownNfts.length,
       mints: unknownNfts.slice(0, 10),
     });
   }
-  const unknown = await unknownProgramInteractions(wallet);
-  if (unknown.length > 0) {
-    findings.push({ protocol: "unknown", status: "unknown-programs", programs: unknown });
+  if (nftMints.length > scannedNfts.length) {
+    findings.push({
+      protocol: "unknown",
+      status: "nft-scan-truncated",
+      unscanned: nftMints.length - scannedNfts.length,
+    });
+  }
+
+  const interactions = await programInteractions(wallet);
+  if (interactions === null) {
+    findings.push({ protocol: "unknown", status: "scan-unavailable" });
+  } else {
+    const byProgram = new Map(REGISTRY.map((p) => [p.program, p]));
+    const unknown = [];
+    const unverified = [];
+    for (const it of interactions) {
+      const proto = byProgram.get(it.program);
+      if (!proto) unknown.push(it);
+      else if (!hasDetector(proto)) unverified.push({ ...it, protocol: proto.name });
+    }
+    if (unverified.length > 0) {
+      findings.push({ protocol: "registry", status: "interaction-unverified", programs: unverified });
+    }
+    if (unknown.length > 0) {
+      findings.push({ protocol: "unknown", status: "unknown-programs", programs: unknown });
+    }
   }
   return findings;
 }
 
-async function unknownProgramInteractions(wallet) {
+async function programInteractions(wallet) {
   const apiKey = process.env.HELIUS_API_KEY;
-  if (!apiKey) return [];
-  const res = await fetch(
-    `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${apiKey}&limit=100`,
-  );
-  if (!res.ok) return [];
-  const txs = await res.json();
-  if (!Array.isArray(txs)) return [];
+  if (!apiKey) return null;
+  let txs;
+  try {
+    const res = await fetch(
+      `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${apiKey}&limit=100`,
+    );
+    if (!res.ok) return null;
+    txs = await res.json();
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(txs)) return null;
   const counts = new Map();
   for (const tx of txs) {
     for (const ix of tx.instructions || []) {
@@ -178,7 +211,7 @@ async function unknownProgramInteractions(wallet) {
   }
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
+    .slice(0, 15)
     .map(([program, txCount]) => ({ program, txCount }));
 }
 
@@ -257,10 +290,14 @@ async function report(apiUrl, wallets) {
         if (missing.length > 0) {
           rows.push({ wallet, protocol: f.protocol, gap: "RECEIPT_UNPRICED_OR_MISSING", mints: missing, apiValueUsd: Math.round(apiValue) });
         }
-      } else if (f.status === "detector-missing") {
-        rows.push({ wallet, protocol: f.protocol, gap: "DETECTOR_MISSING" });
-      } else if (f.status === "unknown-nft") {
-        rows.push({ wallet, protocol: "unknown", gap: "ALERT_UNKNOWN_POSITION_NFT", count: f.count, mints: f.mints });
+      } else if (f.status === "unmatched-nft") {
+        rows.push({ wallet, protocol: "unknown", gap: "NOTE_UNMATCHED_NFTS", count: f.count, mints: f.mints });
+      } else if (f.status === "nft-scan-truncated") {
+        rows.push({ wallet, protocol: "unknown", gap: "NOTE_NFT_SCAN_TRUNCATED", unscanned: f.unscanned });
+      } else if (f.status === "scan-unavailable") {
+        rows.push({ wallet, protocol: "unknown", gap: "ALERT_UNKNOWN_SCAN_UNAVAILABLE" });
+      } else if (f.status === "interaction-unverified") {
+        rows.push({ wallet, protocol: "registry", gap: "PROTOCOL_INTERACTION_UNVERIFIED", programs: f.programs });
       } else if (f.status === "unknown-programs") {
         rows.push({ wallet, protocol: "unknown", gap: "ALERT_UNKNOWN_PROTOCOL", programs: f.programs });
       }
@@ -282,8 +319,11 @@ if (mode === "scan") {
   const [apiUrl, ...wallets] = args;
   const rows = await report(apiUrl, wallets);
   for (const row of rows) console.log(JSON.stringify(row));
-  console.log(`defi-gaps: ${rows.length} gap(s) across ${wallets.length} wallet(s)`);
-  if (process.env.DEFI_GAPS_STRICT === "true" && rows.length > 0) process.exit(1);
+  const enforced = rows.filter((r) => !r.gap.startsWith("NOTE_"));
+  console.log(
+    `defi-gaps: ${enforced.length} gap(s), ${rows.length - enforced.length} note(s) across ${wallets.length} wallet(s)`,
+  );
+  if (process.env.DEFI_GAPS_STRICT === "true" && enforced.length > 0) process.exit(1);
 } else {
   console.error("usage: defi-gaps.mjs scan <wallet> | discover <protocol> | report <api-url> <wallet...>");
   process.exit(2);

@@ -66,13 +66,20 @@ make gaps fail the run once position support ships.
 Anything the registry does not cover is still surfaced rather than silently
 ignored, so new protocols become alerts instead of blind spots:
 
-- **Unmatched position NFTs** — amount-1/decimals-0 mints not claimed by any
-  position-nft detector are reported as `ALERT_UNKNOWN_POSITION_NFT`.
+- **Unmatched position NFTs** — scanned amount-1/decimals-0 mints not claimed
+  by any position-nft detector are reported as `NOTE_UNMATCHED_NFTS` (notes,
+  not strict failures: they may be ordinary collectibles). The scan covers the
+  first 100 NFT-like mints; anything beyond that is surfaced as
+  `NOTE_NFT_SCAN_TRUNCATED`, never silently skipped.
 - **Unknown program interactions** — the wallet's last 100 transactions are
-  scanned for program ids outside infra allowlist + registry; each is
-  reported as `ALERT_UNKNOWN_PROTOCOL` with an interaction count. Triage by
-  adding the program to the registry (with a detector or as receipt-token)
-  or to the infra allowlist.
+  scanned for program ids outside the infra allowlist. Interactions with a
+  registry protocol that has no working detector yet are reported as
+  `PROTOCOL_INTERACTION_UNVERIFIED`; everything else is
+  `ALERT_UNKNOWN_PROTOCOL` with an interaction count. Triage by adding a
+  detector, receipt mints, or an infra allowlist entry.
+- **Scan availability** — when the interaction scan cannot run (no
+  `HELIUS_API_KEY`, vendor error, rate limit), the report emits
+  `ALERT_UNKNOWN_SCAN_UNAVAILABLE` instead of silently looking clean.
 
-Alert rows are informational in smoke output today; `DEFI_GAPS_STRICT=true`
-turns any gap or alert into a failure once position support ships.
+`DEFI_GAPS_STRICT=true` fails the run on any non-`NOTE_` row, and smoke.sh
+propagates that failure; without it the report is informational.
