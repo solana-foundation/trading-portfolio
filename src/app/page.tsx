@@ -34,6 +34,8 @@ type ValueHistoryResponse = {
   >;
 };
 
+type HoldSortKey = "symbol" | "balance" | "price" | "value" | "basis" | "pnl";
+
 type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
 
 function usePost<T>(path: string, wallets: string[]): FetchState<T> {
@@ -448,6 +450,50 @@ function Dashboard() {
     (t) => t.balance > 0 && t.price <= 0,
   );
 
+  const [holdSort, setHoldSort] = useState<{ key: HoldSortKey; dir: 1 | -1 }>({
+    key: "value",
+    dir: -1,
+  });
+  const sortedTokens = useMemo(() => {
+    const tokens = holdings.data?.merged.tokens ?? [];
+    const keyOf = (t: TokenHolding): string | number => {
+      const p = pnlByMint.get(t.address);
+      switch (holdSort.key) {
+        case "symbol":
+          return (t.symbol || t.address).toLowerCase();
+        case "balance":
+          return t.balance;
+        case "price":
+          return t.price;
+        case "basis":
+          return p?.costBasis ?? Number.NEGATIVE_INFINITY;
+        case "pnl":
+          return p?.pnl ?? Number.NEGATIVE_INFINITY;
+        default:
+          return t.value;
+      }
+    };
+    return [...tokens].sort((a, b) => {
+      const va = keyOf(a);
+      const vb = keyOf(b);
+      const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+      return cmp * holdSort.dir;
+    });
+  }, [holdings.data, pnlByMint, holdSort]);
+  const sortTh = (label: string, key: HoldSortKey) => (
+    <th
+      style={{ cursor: "pointer", userSelect: "none" }}
+      onClick={() =>
+        setHoldSort((s) =>
+          s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: -1 },
+        )
+      }
+    >
+      {label}
+      {holdSort.key === key ? (holdSort.dir === -1 ? " ↓" : " ↑") : ""}
+    </th>
+  );
+
   return (
     <div className="wrap">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -583,16 +629,16 @@ function Dashboard() {
               <table>
                 <thead>
                   <tr>
-                    <th>Token</th>
-                    <th>Balance</th>
-                    <th>Price</th>
-                    <th>Value</th>
-                    <th>Cost basis</th>
-                    <th>PnL</th>
+                    {sortTh("Token", "symbol")}
+                    {sortTh("Balance", "balance")}
+                    {sortTh("Price", "price")}
+                    {sortTh("Value", "value")}
+                    {sortTh("Cost basis", "basis")}
+                    {sortTh("PnL", "pnl")}
                   </tr>
                 </thead>
                 <tbody>
-                  {holdings.data.merged.tokens.map((t) => {
+                  {sortedTokens.map((t) => {
                     const p = pnlByMint.get(t.address);
                     return (
                       <tr key={t.address}>
