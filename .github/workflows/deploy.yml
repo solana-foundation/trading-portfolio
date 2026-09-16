@@ -102,32 +102,60 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
 
+      - name: Run DB migrations
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.2/cloud-sql-proxy.linux.amd64
+          chmod +x /tmp/cloud-sql-proxy
+          sudo mkdir -p /cloudsql && sudo chown "$USER" /cloudsql
+          CONN=$(gcloud sql instances describe trading-portfolio-prd --project=${{ vars.GCP_PROJECT }} --format='value(connectionName)')
+          /tmp/cloud-sql-proxy --unix-socket /cloudsql "$CONN" &
+          PROXY_PID=$!
+          sleep 3
+          DATABASE_URL=$(doppler secrets get DATABASE_URL --plain --project trading-portfolio --config prd)
+          echo "::add-mask::$DATABASE_URL"
+          DATABASE_URL="$DATABASE_URL" ./db/apply.sh
+          kill "$PROXY_PID"
+
       - name: Deploy Cloud Run revision (prd)
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
           set -euo pipefail
-          ENV_VARS="^##^"
+          SECRET_REFS=""
           sep=""
           for key in HELIUS_API_KEY BIRDEYE_API_KEY TRITON_API_URL DATABASE_URL; do
             value=$(doppler secrets get "$key" --plain --project trading-portfolio --config prd)
+            if [ -z "$value" ]; then
+              echo "$key: empty in Doppler, skipped"
+              continue
+            fi
             echo "::add-mask::$value"
-            ENV_VARS+="${sep}${key}=${value}"
-            sep="##"
+            slug=$(echo "$key" | tr '[:upper:]_' '[:lower:]-')
+            secret="trading-portfolio-${slug}-prd"
+            current=$(gcloud secrets versions access latest --secret="$secret" --project=${{ vars.GCP_PROJECT }} 2>/dev/null || true)
+            if [ "$current" != "$value" ]; then
+              printf '%s' "$value" | gcloud secrets versions add "$secret" --project=${{ vars.GCP_PROJECT }} --data-file=-
+              echo "$secret: new version added"
+            fi
+            SECRET_REFS+="${sep}${key}=${secret}:latest"
+            sep=","
           done
           gcloud run deploy ${{ env.SERVICE }} \
             --image="$IMAGE" \
             --region=${{ env.GCP_REGION }} \
             --project=${{ vars.GCP_PROJECT }} \
-            --update-env-vars="$ENV_VARS" \
+            --set-secrets="$SECRET_REFS" \
             --quiet
 
       - name: Prod smoke gate
         run: |
           set -euo pipefail
           URL=$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --project=${{ vars.GCP_PROJECT }} --format='value(status.url)')
+          AUTH_TOKEN=$(gcloud auth print-identity-token --impersonate-service-account=${{ vars.GCP_CLOUDRUN_DEPLOYER_SA }} --audiences="$URL" --include-email)
+          echo "::add-mask::$AUTH_TOKEN"
           REQUIRE_DATA=$(doppler secrets get SMOKE_REQUIRE_DATA --plain --project trading-portfolio --config prd 2>/dev/null || echo false)
-          export REQUIRE_DATA
+          export AUTH_TOKEN REQUIRE_DATA
           ./scripts/smoke.sh "$URL"
 
   notify_end:

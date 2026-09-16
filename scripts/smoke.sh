@@ -5,15 +5,22 @@ BASE_URL="${1:?usage: smoke.sh <base-url>}"
 REQUIRE_DATA="${REQUIRE_DATA:-false}"
 WALLET="${SMOKE_WALLET:-86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY}"
 
+AUTH_ARGS=()
+if [ -n "${AUTH_TOKEN:-}" ]; then
+  AUTH_ARGS=(-H "Authorization: Bearer $AUTH_TOKEN")
+fi
+
 fail() { echo "SMOKE FAIL: $*" >&2; exit 1; }
 
 code=$(curl -sS -o /tmp/smoke_bad.json -w '%{http_code}' --max-time 30 \
+  "${AUTH_ARGS[@]}" \
   -X POST "$BASE_URL/api/portfolio/summary" -H 'Content-Type: application/json' -d '{}')
 [ "$code" = "400" ] || fail "bad-request probe expected 400, got $code"
 echo "bad-request probe: 400"
 
 for ep in summary holdings pnl trades; do
   code=$(curl -sS -o "/tmp/smoke_$ep.json" -w '%{http_code}' --max-time 120 \
+    "${AUTH_ARGS[@]}" \
     -X POST "$BASE_URL/api/portfolio/$ep" -H 'Content-Type: application/json' \
     -d "{\"wallets\":[\"$WALLET\"]}")
   case "$code" in

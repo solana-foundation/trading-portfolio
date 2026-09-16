@@ -14,7 +14,16 @@ const CANONICAL_MINTS: Record<string, string> = {
 
 const DUST_THRESHOLD_USD = 0.01;
 
-const holdingsCache = new TtlCache<Holdings>(1_000, 2 * 60 * 1000);
+type TokenListItem = {
+  symbol?: string;
+  name?: string;
+  uiAmount?: number;
+  priceUsd?: number;
+  logoURI?: string;
+  address: string;
+};
+
+const tokenListCache = new TtlCache<TokenListItem[]>(1_000, 2 * 60 * 1000);
 const histPriceCache = new TtlCache<number>(10_000, 7 * 24 * 60 * 60 * 1000);
 const tokenMetaCache = new TtlCache<{ symbol: string; icon?: string }>(
   5_000,
@@ -28,30 +37,39 @@ function birdeyeHeaders(): Record<string, string> {
 }
 
 type BirdeyeHoldingsResp = {
-  data?: {
-    items?: Array<{
-      symbol?: string;
-      name?: string;
-      uiAmount?: number;
-      priceUsd?: number;
-      logoURI?: string;
-      address: string;
-    }>;
-  };
+  data?: { items?: TokenListItem[] };
 };
 
-export async function getHoldings(wallet: string): Promise<Holdings> {
-  const cached = holdingsCache.get(wallet);
+async function getTokenList(wallet: string): Promise<TokenListItem[]> {
+  const cached = tokenListCache.get(wallet);
   if (cached) return cached;
-
   const data = await fetchJSON<BirdeyeHoldingsResp>(
     `https://public-api.birdeye.so/v1/wallet/token_list?wallet=${wallet}`,
     { headers: birdeyeHeaders() },
   );
+  const items = data.data?.items || [];
+  tokenListCache.set(wallet, items);
+  return items;
+}
 
-  if (!data.data?.items) return { tokens: [], totalValue: 0 };
+export async function getRawBalances(
+  wallet: string,
+): Promise<Map<string, number>> {
+  const items = await getTokenList(wallet);
+  const out = new Map<string, number>();
+  for (const t of items) {
+    const balance = t.uiAmount || 0;
+    if (balance <= 0) continue;
+    const mint = t.address === NATIVE_SOL ? SOL_MINT : t.address;
+    out.set(mint, (out.get(mint) || 0) + balance);
+  }
+  return out;
+}
 
-  const tokens: TokenHolding[] = data.data.items
+export async function getHoldings(wallet: string): Promise<Holdings> {
+  const items = await getTokenList(wallet);
+
+  const tokens: TokenHolding[] = items
     .map((t) => ({
       symbol: t.symbol,
       name: t.name,
@@ -68,12 +86,10 @@ export async function getHoldings(wallet: string): Promise<Holdings> {
     })
     .sort((a, b) => b.value - a.value);
 
-  const holdings: Holdings = {
+  return {
     tokens,
     totalValue: tokens.reduce((s, t) => s + t.value, 0),
   };
-  holdingsCache.set(wallet, holdings);
-  return holdings;
 }
 
 export async function getHistoricalPrice(
@@ -103,6 +119,72 @@ export async function getHistoricalPrice(
     );
     return null;
   }
+}
+
+const SERIES_CHUNK_DAYS = 800;
+
+export async function getPriceSeries(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  type Resp = {
+    success?: boolean;
+    data?: { items?: Array<{ unixTime?: number; value?: number }> };
+  };
+  for (let from = fromTs; from <= toTs; from += SERIES_CHUNK_DAYS * 86_400) {
+    const to = Math.min(from + SERIES_CHUNK_DAYS * 86_400 - 1, toTs);
+    try {
+      const data = await fetchJSON<Resp>(
+        `https://public-api.birdeye.so/defi/history_price?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
+        { headers: birdeyeHeaders() },
+      );
+      for (const item of data?.data?.items || []) {
+        if (typeof item.unixTime === "number" && typeof item.value === "number" && item.value > 0) {
+          out.set(Math.floor(item.unixTime / 86_400) * 86_400, item.value);
+        }
+      }
+    } catch (e) {
+      console.error(
+        `portfolio: Birdeye price series failed for ${mint.slice(0, 4)}…: ${(e as Error).message}`,
+      );
+    }
+  }
+  return out;
+}
+
+const NET_WORTH_MAX_DAYS = 90;
+
+export async function getNetWorthHistory(
+  wallet: string,
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  type Resp = {
+    data?: {
+      history?: Array<{ timestamp?: string; net_worth?: number }>;
+    };
+  };
+  try {
+    const data = await fetchJSON<Resp>(
+      `https://public-api.birdeye.so/wallet/v2/net-worth?wallet=${wallet}&count=${NET_WORTH_MAX_DAYS}&direction=back&type=1d`,
+      { headers: birdeyeHeaders() },
+    );
+    const today = Math.floor(Date.now() / 1000 / 86_400) * 86_400;
+    for (const row of data?.data?.history || []) {
+      if (!row.timestamp || typeof row.net_worth !== "number") continue;
+      const ts = Math.floor(Date.parse(row.timestamp) / 1000);
+      if (!Number.isFinite(ts)) continue;
+      const day = Math.floor(ts / 86_400) * 86_400;
+      if (day >= today) continue;
+      if (!out.has(day)) out.set(day, row.net_worth);
+    }
+  } catch (e) {
+    console.error(
+      `portfolio: Birdeye net-worth history failed for ${wallet.slice(0, 4)}…: ${(e as Error).message}`,
+    );
+  }
+  return out;
 }
 
 export async function getTokenMeta(
