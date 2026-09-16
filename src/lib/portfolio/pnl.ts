@@ -50,12 +50,13 @@ export function coveredCostBasis(
   balance: number,
   totalSpent: number,
   totalBought: number,
+  poolLimit = Number.POSITIVE_INFINITY,
 ): { coveredAmount: number; avgCostPerToken: number; costBasis: number } {
-  if (totalSpent <= 0 || totalBought <= 0 || balance <= 0) {
+  if (totalSpent <= 0 || totalBought <= 0 || balance <= 0 || poolLimit <= 0) {
     return { coveredAmount: 0, avgCostPerToken: 0, costBasis: 0 };
   }
   const avgCostPerToken = totalSpent / totalBought;
-  const coveredAmount = Math.min(balance, totalBought);
+  const coveredAmount = Math.min(balance, totalBought, poolLimit);
   return {
     coveredAmount,
     avgCostPerToken,
@@ -324,7 +325,13 @@ export async function getAggregateTradePnL(
   let totalCostBasis = 0;
   let totalValue = 0;
 
-  for (let i = 0; i < wallets.length; i++) {
+  const boughtPool = new Map<string, number>();
+  for (const [mint, m] of byMint.entries()) boughtPool.set(mint, m.totalBought);
+  const walletOrder = wallets
+    .map((_, i) => i)
+    .sort((a, b) => wallets[a].localeCompare(wallets[b]));
+
+  for (const i of walletOrder) {
     const w = wallets[i];
     const rows: TradePnLRow[] = [];
     for (const t of holdings[i]?.tokens || []) {
@@ -337,13 +344,15 @@ export async function getAggregateTradePnL(
 
       const own = perWalletByMint[i].get(t.address);
 
+      const poolLeft = boughtPool.get(t.address) ?? 0;
       const ownUsable = own && own.totalSpent > 0 && own.totalBought > 0;
       const hhUsable = hh && hh.totalSpent > 0 && hh.totalBought > 0;
       if (!ownUsable && !hhUsable) continue;
-      const preferOwn =
-        ownUsable &&
-        (!hhUsable ||
-          Math.min(bal, own.totalBought) >= Math.min(bal, hh.totalBought));
+      const ownCover = ownUsable
+        ? Math.min(bal, own.totalBought, poolLeft)
+        : 0;
+      const hhCover = hhUsable ? Math.min(bal, poolLeft) : 0;
+      const preferOwn = ownUsable && ownCover >= hhCover;
       const totalSpent = preferOwn ? own!.totalSpent : hh!.totalSpent;
       const totalBought = preferOwn ? own!.totalBought : hh!.totalBought;
       const sourcesSet = preferOwn ? own!.sources : hh!.sources;
@@ -355,8 +364,11 @@ export async function getAggregateTradePnL(
         bal,
         totalSpent,
         totalBought,
+        poolLeft,
       );
-      if (bal > totalBought * COVERAGE_TOLERANCE) hasUnpriced = true;
+      if (bal > coveredAmount * COVERAGE_TOLERANCE) hasUnpriced = true;
+      if (coveredAmount <= 0) continue;
+      boughtPool.set(t.address, poolLeft - coveredAmount);
       const perTokenCost = avgCostPerToken;
       const currentPrice = t.price || hh?.price || 0;
       const currentValue = bal * currentPrice;
