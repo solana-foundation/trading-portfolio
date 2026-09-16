@@ -78,6 +78,6 @@ resource "google_service_account_iam_member" "cloudrun_deployer_token_creator" {
 
 resource "google_service_account_iam_member" "cloudrun_deployer_self_token_creator" {
   service_account_id = google_service_account.cloudrun_deployer.name
-  role               = "roles/iam.serviceAccountTokenCreator"
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
   member             = "serviceAccount:${google_service_account.cloudrun_deployer.email}"
 }
