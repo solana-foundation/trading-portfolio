@@ -343,6 +343,33 @@ function ValueChart({ history }: { history: ValueHistoryResponse }) {
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(last, Math.max(from, to, lo + 1));
   const view = points.slice(lo, hi + 1);
+  const presets: Array<{ label: string; days?: number; ytd?: boolean }> = [
+    { label: "1W", days: 7 },
+    { label: "1M", days: 30 },
+    { label: "3M", days: 90 },
+    { label: "6M", days: 182 },
+    { label: "YTD", ytd: true },
+    { label: "All" },
+  ];
+  const applyPreset = (p: { days?: number; ytd?: boolean }) => {
+    if (!p.days && !p.ytd) {
+      setRange(null);
+      return;
+    }
+    let startIdx = 0;
+    if (p.days) {
+      startIdx = Math.max(0, last - p.days);
+    } else {
+      const jan1 = `${points[last].day.slice(0, 4)}-01-01`;
+      const found = points.findIndex((pt) => pt.day >= jan1);
+      startIdx = found < 0 ? 0 : found;
+    }
+    setRange([startIdx, last]);
+  };
+  const ticks =
+    view.length > 3
+      ? [0, 1, 2, 3].map((i) => view[Math.round(((view.length - 1) * i) / 3)].day)
+      : view.map((p) => p.day);
   const justBuilt = Object.values(history.wallets ?? {}).filter(
     (m) => m.backfilledNow,
   ).length;
@@ -367,13 +394,30 @@ function ValueChart({ history }: { history: ValueHistoryResponse }) {
           </span>
         )}
       </h2>
+      <div className="row" style={{ marginBottom: 8, gap: 6 }}>
+        {presets.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => applyPreset(p)}
+          >
+            {p.label}
+          </button>
+        ))}
+        <span style={{ marginLeft: "auto", fontSize: 13 }}>
+          Today: {fmtUsd(history.todayValueUsd)}
+        </span>
+      </div>
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none">
         <polyline points={path} fill="none" stroke="#8b5cf6" strokeWidth="2" />
       </svg>
-      <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
-        <span className="muted">{view[0].day}</span>
-        <span>Today: {fmtUsd(history.todayValueUsd)}</span>
-        <span className="muted">{view[view.length - 1].day}</span>
+      <div className="row" style={{ justifyContent: "space-between", fontSize: 11 }}>
+        {ticks.map((d, i) => (
+          <span className="muted" key={`${d}-${i}`}>
+            {d}
+          </span>
+        ))}
       </div>
       {last > 1 && (
         <div style={{ marginTop: 10 }}>
