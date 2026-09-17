@@ -89,6 +89,17 @@ export type TradePnLSummary = {
   cashflowCount: number;
 };
 
+export type DefiPositionRow = {
+  wallet: SolanaAddress;
+  protocol: string;
+  type: "deposit" | "position" | "interaction" | "unmatched-nft" | "scan-unavailable";
+  mint: SolanaAddress | null;
+  symbol: string | null;
+  valueUsd: number | null;
+  count: number;
+  programId?: string;
+};
+
 export type MintCost = {
   mint: SolanaAddress;
   symbol: string | null;
