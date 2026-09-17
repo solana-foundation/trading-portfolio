@@ -14,6 +14,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@jup-ag/wallet-adapter": "^0.2.6",
+    "@solana/wallet-adapter-base": "^0.9.28",
+    "@solana/wallet-adapter-react": "^0.15.40",
+    "@solana/web3.js": "^1.99.0",
     "next": "^15.5.0",
     "pg": "^8.23.0",
     "react": "^19.1.0",
