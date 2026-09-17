@@ -336,8 +336,10 @@ function ValueChart({ history }: { history: ValueHistoryResponse }) {
   const points = history.series;
   const last = points.length - 1;
   const [range, setRange] = useState<[number, number] | null>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   useEffect(() => {
     setRange(null);
+    setHoverIdx(null);
   }, [history]);
   if (points.length === 0) return null;
   const [from, to] = range ?? [0, last];
@@ -421,11 +423,50 @@ function ValueChart({ history }: { history: ValueHistoryResponse }) {
           </button>
         ))}
         <span style={{ marginLeft: "auto", fontSize: 13 }}>
-          Today: {fmtUsd(history.todayValueUsd)}
+          {hoverIdx != null && view[hoverIdx] ? (
+            <>
+              <span className="muted">{view[hoverIdx].day}:</span>{" "}
+              {fmtUsd(view[hoverIdx].valueUsd)}
+            </>
+          ) : (
+            <>Today: {fmtUsd(history.todayValueUsd)}</>
+          )}
         </span>
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none">
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        width="100%"
+        height={h}
+        preserveAspectRatio="none"
+        style={{ cursor: "crosshair" }}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const frac = (e.clientX - rect.left) / rect.width;
+          const i = Math.round(frac * (view.length - 1));
+          setHoverIdx(Math.max(0, Math.min(view.length - 1, i)));
+        }}
+        onMouseLeave={() => setHoverIdx(null)}
+      >
         <polyline points={path} fill="none" stroke="#8b5cf6" strokeWidth="2" />
+        {hoverIdx != null && view[hoverIdx] && (
+          <>
+            <line
+              x1={x(hoverIdx)}
+              x2={x(hoverIdx)}
+              y1={0}
+              y2={h}
+              stroke="#8a93a5"
+              strokeWidth="1"
+              opacity="0.5"
+            />
+            <circle
+              cx={x(hoverIdx)}
+              cy={y(view[hoverIdx].valueUsd)}
+              r="4"
+              fill="#8b5cf6"
+            />
+          </>
+        )}
       </svg>
       <div className="row" style={{ justifyContent: "space-between", fontSize: 11 }}>
         {ticks.map((d, i) => (
@@ -476,9 +517,10 @@ function Dashboard() {
   const [editing, setEditing] = useState<"new" | Portfolio | null>(null);
 
   const allWallets = useMemo(() => {
+    if (!connected) return [];
     if (folios.active) return folios.active.wallets;
     const set = new Set<string>();
-    if (connected) set.add(connected);
+    set.add(connected);
     for (const w of tracked.wallets) set.add(w);
     return Array.from(set);
   }, [connected, tracked.wallets, folios.active]);
@@ -574,6 +616,7 @@ function Dashboard() {
         <UnifiedWalletButton />
       </div>
 
+      {connected && (
       <div className="row">
         <button
           type="button"
@@ -596,8 +639,9 @@ function Dashboard() {
           ＋ New portfolio
         </button>
       </div>
+      )}
 
-      {editing && (
+      {connected && editing && (
         <PortfolioEditor
           initial={editing === "new" ? null : editing}
           onSave={(p) => {
@@ -618,7 +662,7 @@ function Dashboard() {
         />
       )}
 
-      {!folios.active && (
+      {connected && !folios.active && (
         <WalletInput
           tracked={tracked.wallets.filter((w) => w !== connected)}
           atLimit={allWallets.length >= MAX_WALLETS_PER_REQUEST}
@@ -637,7 +681,9 @@ function Dashboard() {
 
       {wallets.length === 0 && (
         <p className="muted" style={{ textAlign: "center" }}>
-          Connect a wallet or paste an address to load a portfolio.
+          {connected
+            ? "Add a wallet to this portfolio to load it."
+            : "Connect a wallet to view a portfolio."}
         </p>
       )}
 
