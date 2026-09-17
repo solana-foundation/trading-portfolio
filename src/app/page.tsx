@@ -386,8 +386,22 @@ function ValueChart({ history }: { history: ValueHistoryResponse }) {
     <div className="panel">
       <h2>
         Value history{" "}
-        {history.partial && <span className="badge warn">partial</span>}{" "}
-        {history.hasUnpricedDays && <span className="badge warn">unpriced days</span>}{" "}
+        {history.partial && (
+          <span
+            className="badge"
+            title="Some wallets' series could not be fully built (mint cap or vendor limits); the chart may understate those wallets."
+          >
+            ⓘ partial
+          </span>
+        )}{" "}
+        {history.hasUnpricedDays && (
+          <span
+            className="badge"
+            title="On some days the vendor had no price for part of the holdings; those days count only the priceable portion."
+          >
+            ⓘ unpriced days
+          </span>
+        )}{" "}
         {justBuilt > 0 && (
           <span className="badge">
             history just built for {justBuilt} wallet{justBuilt > 1 ? "s" : ""}
@@ -649,19 +663,28 @@ function Dashboard() {
           {(pnl.data?.hasUnpriced || pnl.data?.historyTruncated) && (
             <div className="row">
               {pnl.data.hasUnpriced && (
-                <span className="badge warn">
-                  unpriced:{" "}
-                  {unpricedHeld.length > 0 &&
-                    `${unpricedHeld.length} held (${unpricedHeld
-                      .slice(0, 5)
-                      .map((t) => t.symbol || shortAddr(t.address))
-                      .join(", ")}${unpricedHeld.length > 5 ? "…" : ""}); `}
-                  some events couldn&apos;t be valued (no day-of price, or an
-                  ambiguous multi-token swap) — excluded from cost basis and
-                  trade history, never guessed
+                <span
+                  className="badge"
+                  title={`Some events couldn't be valued at their day's price (no vendor price, or an ambiguous multi-token swap). They are excluded from cost basis and trade history rather than guessed, so PnL stays conservative.${
+                    unpricedHeld.length > 0
+                      ? ` Unpriced held tokens: ${unpricedHeld
+                          .slice(0, 5)
+                          .map((t) => t.symbol || shortAddr(t.address))
+                          .join(", ")}${unpricedHeld.length > 5 ? "…" : ""}`
+                      : ""
+                  }`}
+                >
+                  ⓘ incomplete pricing
                 </span>
               )}
-              {pnl.data.historyTruncated && <span className="badge warn">history truncated</span>}
+              {pnl.data.historyTruncated && (
+                <span
+                  className="badge"
+                  title="Provider transaction history hit a depth limit for at least one wallet, so older events may be missing. Coverage gaps reduce cost basis, never inflate PnL."
+                >
+                  ⓘ history truncated
+                </span>
+              )}
             </div>
           )}
 
@@ -707,7 +730,7 @@ function Dashboard() {
                               {t.symbol || shortAddr(t.address)}
                             </span>
                             {t.hidden && (
-                              <span className="badge warn">{t.hidden}</span>
+                              <span className="badge">{t.hidden}</span>
                             )}
                           </span>
                         </td>
@@ -716,7 +739,7 @@ function Dashboard() {
                           {t.price > 0 ? (
                             fmtUsd(t.price)
                           ) : (
-                            <span className="badge warn">unpriced</span>
+                            <span className="badge">unpriced</span>
                           )}
                         </td>
                         <td className="mono">{fmtUsd(t.value)}</td>
