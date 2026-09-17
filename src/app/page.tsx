@@ -8,9 +8,12 @@ import {
 } from "@jup-ag/wallet-adapter";
 import { MAX_WALLETS_PER_REQUEST } from "@/lib/portfolio/request";
 import type {
+  DefiPositionRow,
   TokenHolding,
   TradePnLResult,
 } from "@/lib/portfolio/types";
+
+type DefiResponse = { positions: DefiPositionRow[]; hasUnvalued: boolean };
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const STORAGE_KEY = "mockup-wallets";
@@ -533,6 +536,7 @@ function Dashboard() {
   const holdings = usePost<HoldingsResponse>("/api/portfolio/holdings", wallets);
   const pnl = usePost<TradePnLResult>("/api/portfolio/pnl", wallets);
   const history = usePost<ValueHistoryResponse>("/api/portfolio/value-history", wallets);
+  const defi = usePost<DefiResponse>("/api/portfolio/defi", wallets);
 
   const pnlByMint = useMemo(() => {
     const map = new Map<string, { costBasis: number; pnl: number }>();
@@ -812,6 +816,67 @@ function Dashboard() {
                     : `Show hidden tokens (${sortedTokens.filter((t) => t.hidden).length})`}
                 </button>
               </div>
+            )}
+          </div>
+
+          <div className="panel scroll">
+            <h2>
+              DeFi positions{" "}
+              {defi.data?.hasUnvalued && (
+                <span
+                  className="badge"
+                  title="Positions are detected on-chain from program accounts and position NFTs. USD values are computed only where the layout has been verified (Kamino deposits so far); '—' means detected but not yet valued."
+                >
+                  ⓘ partially valued
+                </span>
+              )}
+            </h2>
+            {defi.loading && <p className="muted">Scanning DeFi programs…</p>}
+            {defi.error && <p className="neg">Error: {defi.error}</p>}
+            {defi.data && defi.data.positions.length === 0 && (
+              <p className="muted">No DeFi positions detected.</p>
+            )}
+            {defi.data && defi.data.positions.length > 0 && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Wallet</th>
+                    <th>Protocol</th>
+                    <th>Type</th>
+                    <th>Asset</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {defi.data.positions.map((p, i) => (
+                    <tr key={`${p.wallet}-${p.protocol}-${p.mint ?? p.programId ?? i}-${i}`}>
+                      <td className="mono muted">{shortAddr(p.wallet)}</td>
+                      <td>
+                        {p.protocol === "unknown" ? (
+                          <span className="muted">
+                            unknown
+                            {p.programId ? (
+                              <span className="mono"> {shortAddr(p.programId)}</span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          p.protocol
+                        )}
+                      </td>
+                      <td>
+                        <span className="badge">
+                          {p.type}
+                          {p.type !== "deposit" && p.count > 1 ? ` ×${p.count}` : ""}
+                        </span>
+                      </td>
+                      <td>{p.symbol || (p.mint ? shortAddr(p.mint) : "—")}</td>
+                      <td className="mono">
+                        {p.valueUsd != null ? fmtUsd(p.valueUsd) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
 
