@@ -285,7 +285,9 @@ async function report(apiUrl, wallets) {
     const holdings = await apiReport(apiUrl, [wallet], process.env.AUTH_TOKEN);
     const perWallet = holdings.perWallet[wallet];
     const apiValue = perWallet?.totalValue ?? 0;
-    const apiMints = new Set((perWallet?.tokens || []).map((t) => t.address));
+    const apiMints = new Set(
+      (perWallet?.tokens || []).filter((t) => !t.hidden).map((t) => t.address),
+    );
     for (const f of findings) {
       if (f.status === "position") {
         rows.push({ wallet, protocol: f.protocol, gap: "POSITION_NOT_IN_API", count: f.count, apiValueUsd: Math.round(apiValue) });

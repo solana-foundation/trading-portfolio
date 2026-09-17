@@ -1,5 +1,7 @@
 export type SolanaAddress = string;
 
+export type HiddenReason = "impostor" | "unpriced" | "dust";
+
 export type TokenHolding = {
   address: SolanaAddress;
   symbol?: string;
@@ -8,11 +10,14 @@ export type TokenHolding = {
   balance: number;
   price: number;
   value: number;
+  hidden?: HiddenReason;
 };
 
 export type Holdings = {
   tokens: TokenHolding[];
   totalValue: number;
+  unpricedCount: number;
+  unpricedMints: SolanaAddress[];
 };
 
 export type CashEvent = {
@@ -87,6 +92,7 @@ export type TradePnLSummary = {
   xirrPct: number | null;
   benchmarkSolXirrPct: number | null;
   cashflowCount: number;
+  unpricedCashflowCount: number;
 };
 
 export type MintCost = {
