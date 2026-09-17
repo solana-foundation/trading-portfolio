@@ -62,6 +62,7 @@ function usePost<T>(path: string, wallets: string[]): FetchState<T> {
     })
       .then(async (r) => {
         const body = (await r.json()) as T & { error?: string };
+        if (ctrl.signal.aborted) return;
         if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
         setState({ data: body, loading: false, error: null });
       })
@@ -871,7 +872,12 @@ export default function Page() {
   );
   return (
     <UnifiedWalletProvider wallets={[]} config={config}>
-      <Dashboard />
+      <DashboardMount />
     </UnifiedWalletProvider>
   );
+}
+
+function DashboardMount() {
+  const { publicKey } = useWallet();
+  return <Dashboard key={publicKey?.toBase58() ?? "disconnected"} />;
 }
