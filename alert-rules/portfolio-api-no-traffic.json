@@ -1,6 +1,6 @@
 {
   "uid": "portfolio-api-no-traffic",
-  "title": "portfolio-api: no successful traffic for 30m (service, auth, or canary down)",
+  "title": "portfolio-api: no successful traffic for 45m (service, auth, or canary down)",
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
   "noDataState": "Alerting",
@@ -12,7 +12,7 @@
       "datasourceUid": "breeze-gcm",
       "queryType": "timeSeriesList",
       "relativeTimeRange": {
-        "from": 1800,
+        "from": 2700,
         "to": 0
       },
       "model": {
@@ -56,7 +56,7 @@
         "type": "reduce",
         "refId": "B",
         "expression": "A",
-        "reducer": "last",
+        "reducer": "sum",
         "settings": {
           "mode": "replaceNN",
           "replaceWithValue": 0
@@ -103,7 +103,7 @@
   ],
   "condition": "C",
   "annotations": {
-    "summary": "Portfolio API served no successful (2xx) requests for 30 minutes. The canary probes every 15m, so the service, auth, or the canary is down."
+    "summary": "Portfolio API served no successful (2xx) requests in the last 45 minutes. The canary probes every ~15m (GitHub cron jitter can stretch to ~30m), so the service, auth, or the canary is down."
   },
   "labels": {
     "service": "trading-portfolio",
