@@ -1,5 +1,7 @@
 # Rollback
 
+**Infrastructure ordering** — apply `terraform/envs/prd` before pushing a deploy that depends on it. The deploy workflow's migration job attaches VPC settings only once the terraform-created subnet exists; deploying network-dependent changes before the apply blocks the release at the migration step. After an apply, verify with a deploy (or workflow re-run) and confirm the smoke gate passes.
+
 **Service** — route traffic back to a previous Cloud Run revision (no rebuild):
 
 ```

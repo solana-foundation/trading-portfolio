@@ -1,6 +1,6 @@
 {
   "uid": "portfolio-api-no-traffic",
-  "title": "portfolio-api: no traffic for 30m (service or canary down)",
+  "title": "portfolio-api: no successful traffic for 30m (service, auth, or canary down)",
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
   "noDataState": "Alerting",
@@ -28,6 +28,10 @@
             "resource.label.service_name",
             "=",
             "trading-portfolio-prd-us",
+            "AND",
+            "metric.label.response_code_class",
+            "=",
+            "2xx",
             "AND",
             "metric.type",
             "=",
@@ -99,7 +103,7 @@
   ],
   "condition": "C",
   "annotations": {
-    "summary": "Portfolio API received no requests for 30 minutes. The canary probes every 15m, so the service, the canary, or auth is down."
+    "summary": "Portfolio API served no successful (2xx) requests for 30 minutes. The canary probes every 15m, so the service, auth, or the canary is down."
   },
   "labels": {
     "service": "trading-portfolio",

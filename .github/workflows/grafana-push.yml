@@ -116,11 +116,17 @@ jobs:
           curl -sS --fail-with-body -o /tmp/policies.json \
             -H "Authorization: Bearer $GRAFANA_API_TOKEN" \
             "$GRAFANA_API_URL/api/v1/provisioning/policies"
-          if jq -e '[.routes // [] | .[] | .object_matchers // [] | .[] | select(. == ["service","=","trading-portfolio"])] | length > 0' /tmp/policies.json >/dev/null; then
+          if jq -e '
+            [.routes // [] | .[]
+             | select((.object_matchers // []) == [["service","=","trading-portfolio"]]
+                      and .receiver == "alerts-trading"
+                      and ((.continue // false) == false))]
+            | length > 0' /tmp/policies.json >/dev/null; then
             echo "route already present"
             exit 0
           fi
-          jq '.routes = ([{receiver: "alerts-trading", object_matchers: [["service","=","trading-portfolio"]], continue: false}] + (.routes // []))' \
+          jq '.routes = ([{receiver: "alerts-trading", object_matchers: [["service","=","trading-portfolio"]], continue: false}]
+                + [(.routes // [])[] | select((.object_matchers // []) != [["service","=","trading-portfolio"]])])' \
             /tmp/policies.json > /tmp/policies-new.json
           http_code=$(curl -sS -o /tmp/pol-resp.json -w '%{http_code}' \
             -X PUT "$GRAFANA_API_URL/api/v1/provisioning/policies" \

@@ -10,6 +10,12 @@ resource "google_compute_subnetwork" "cloud_run" {
   network                  = google_compute_network.vpc.id
   ip_cidr_range            = "10.10.0.0/24"
   private_ip_google_access = true
+
+  log_config {
+    aggregation_interval = "INTERVAL_10_MIN"
+    flow_sampling        = 0.5
+    metadata             = "INCLUDE_ALL_METADATA"
+  }
 }
 
 resource "google_compute_global_address" "private_service_access" {
