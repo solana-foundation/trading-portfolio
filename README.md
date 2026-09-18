@@ -24,7 +24,7 @@ Common to every endpoint:
 
 - `POST` with `Content-Type: application/json`.
 - Body always includes `wallets`: array of 1–20 base58 Solana addresses; duplicates are deduplicated. Extra unknown fields are rejected where noted.
-- Errors: `400 {"error": string}` for invalid input, `502 {"error": string}` when an upstream data provider fails (responses are never partial-as-complete — retry), `503` from `value-history` when no store is configured.
+- Errors: `400 {"error": string}` for invalid input, `429 {"error": string}` when the per-instance rate limit (30 requests/min) is exceeded — back off and retry shortly, `502 {"error": string}` when an upstream data provider fails (responses are never partial-as-complete — retry), `503` from `value-history` when no store is configured.
 - Numbers are plain JSON numbers in USD unless stated; timestamps `ts` are unix seconds; `day` is `YYYY-MM-DD` (UTC).
 - Degradation is always surfaced, never guessed: watch `hasUnpriced`, `historyTruncated`, `partial`, `hasUnpricedDays`.
 

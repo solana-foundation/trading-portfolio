@@ -11,7 +11,7 @@ export const maxDuration = 120;
 export async function POST(request: Request) {
   const parsed = await parseWalletsBody(request);
   if (!parsed.ok) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
+    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
   }
   if (!dbConfigured()) {
     return NextResponse.json(
