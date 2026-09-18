@@ -107,7 +107,8 @@
   },
   "labels": {
     "service": "trading-portfolio",
-    "severity": "critical"
+    "severity": "critical",
+    "slack": "true"
   },
   "notification_settings": {
     "receiver": "alerts-trading"

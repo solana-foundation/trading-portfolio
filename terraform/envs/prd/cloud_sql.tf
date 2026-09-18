@@ -9,7 +9,10 @@ resource "google_sql_database_instance" "this" {
   database_version    = "POSTGRES_16"
   region              = var.region
   deletion_protection = true
-  depends_on          = [google_project_service.this["sqladmin.googleapis.com"]]
+  depends_on = [
+    google_project_service.this["sqladmin.googleapis.com"],
+    google_service_networking_connection.private_service_access,
+  ]
 
   settings {
     edition           = "ENTERPRISE"
@@ -20,8 +23,9 @@ resource "google_sql_database_instance" "this" {
     disk_autoresize   = true
 
     ip_configuration {
-      ipv4_enabled = true
-      ssl_mode     = "ENCRYPTED_ONLY"
+      ipv4_enabled    = false
+      private_network = google_compute_network.vpc.id
+      ssl_mode        = "ENCRYPTED_ONLY"
     }
 
     backup_configuration {
