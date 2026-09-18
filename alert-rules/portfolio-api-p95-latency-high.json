@@ -103,7 +103,8 @@
   },
   "labels": {
     "service": "trading-portfolio",
-    "severity": "warning"
+    "severity": "warning",
+    "slack": "true"
   },
   "notification_settings": {
     "receiver": "alerts-trading"

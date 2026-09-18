@@ -1,6 +1,6 @@
 {
-  "uid": "portfolio-sql-cpu-high",
-  "title": "portfolio-sql: CPU > 80% for 15m",
+  "uid": "portfolio-sql-connections-high",
+  "title": "portfolio-sql: connections > 40 for 15m",
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
   "noDataState": "OK",
@@ -31,11 +31,11 @@
             "AND",
             "metric.type",
             "=",
-            "cloudsql.googleapis.com/database/cpu/utilization"
+            "cloudsql.googleapis.com/database/postgresql/num_backends"
           ],
           "alignmentPeriod": "cloud-monitoring-auto",
           "perSeriesAligner": "ALIGN_MEAN",
-          "crossSeriesReducer": "REDUCE_MEAN",
+          "crossSeriesReducer": "REDUCE_SUM",
           "groupBys": []
         }
       }
@@ -76,7 +76,7 @@
             "evaluator": {
               "type": "gt",
               "params": [
-                0.8
+                40
               ]
             },
             "operator": {
@@ -99,7 +99,7 @@
   ],
   "condition": "C",
   "annotations": {
-    "summary": "Portfolio Cloud SQL instance CPU has exceeded 80% for 15 minutes."
+    "summary": "Cloud SQL connection count above 40 for 15 minutes (db-g1-small caps around 50)."
   },
   "labels": {
     "service": "trading-portfolio",

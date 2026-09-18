@@ -1,9 +1,9 @@
 {
-  "uid": "portfolio-sql-cpu-high",
-  "title": "portfolio-sql: CPU > 80% for 15m",
+  "uid": "portfolio-api-no-traffic",
+  "title": "portfolio-api: no traffic for 30m (service or canary down)",
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
-  "noDataState": "OK",
+  "noDataState": "Alerting",
   "execErrState": "Error",
   "for": "15m",
   "data": [
@@ -12,7 +12,7 @@
       "datasourceUid": "breeze-gcm",
       "queryType": "timeSeriesList",
       "relativeTimeRange": {
-        "from": 900,
+        "from": 1800,
         "to": 0
       },
       "model": {
@@ -23,19 +23,19 @@
           "filters": [
             "resource.type",
             "=",
-            "cloudsql_database",
+            "cloud_run_revision",
             "AND",
-            "resource.label.database_id",
+            "resource.label.service_name",
             "=",
-            "trading-portfolio-104696:trading-portfolio-prd",
+            "trading-portfolio-prd-us",
             "AND",
             "metric.type",
             "=",
-            "cloudsql.googleapis.com/database/cpu/utilization"
+            "run.googleapis.com/request_count"
           ],
           "alignmentPeriod": "cloud-monitoring-auto",
-          "perSeriesAligner": "ALIGN_MEAN",
-          "crossSeriesReducer": "REDUCE_MEAN",
+          "perSeriesAligner": "ALIGN_RATE",
+          "crossSeriesReducer": "REDUCE_SUM",
           "groupBys": []
         }
       }
@@ -74,9 +74,9 @@
         "conditions": [
           {
             "evaluator": {
-              "type": "gt",
+              "type": "lt",
               "params": [
-                0.8
+                0.000001
               ]
             },
             "operator": {
@@ -99,11 +99,11 @@
   ],
   "condition": "C",
   "annotations": {
-    "summary": "Portfolio Cloud SQL instance CPU has exceeded 80% for 15 minutes."
+    "summary": "Portfolio API received no requests for 30 minutes. The canary probes every 15m, so the service, the canary, or auth is down."
   },
   "labels": {
     "service": "trading-portfolio",
-    "severity": "warning",
+    "severity": "critical",
     "slack": "true"
   },
   "notification_settings": {
