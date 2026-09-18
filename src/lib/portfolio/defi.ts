@@ -12,6 +12,8 @@ const OBLIGATION_OWNER_OFFSET = 64;
 const RESERVE_MINT_OFFSET = 128;
 const NFT_SCAN_CAP = 40;
 const MIN_POSITION_USD = 0.01;
+const WALLET_CONCURRENCY = 4;
+const NFT_PROBE_CONCURRENCY = 5;
 
 const OWNER_ACCOUNT_PROTOCOLS = [
   { name: "kamino-farms", program: "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr", ownerOffset: 48 },
@@ -87,6 +89,24 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
 }
 
 type ProgramAccount = { pubkey: string; account: { data: [string, string] } };
+
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await fn(items[i]);
+      }
+    }),
+  );
+  return results;
+}
 
 const reserveMintCache = new TtlCache<string>(2_000, 24 * 60 * 60 * 1000);
 
@@ -179,7 +199,7 @@ async function ownerAccountPositions(wallet: string): Promise<DefiPositionRow[]>
 
 async function nftPositions(
   wallet: string,
-): Promise<{ rows: DefiPositionRow[]; unmatchedNfts: number }> {
+): Promise<{ rows: DefiPositionRow[]; unmatchedNfts: number; unscannedNfts: number }> {
   const nftMints: string[] = [];
   for (const programId of TOKEN_PROGRAMS) {
     const res = await rpc<{
@@ -196,21 +216,23 @@ async function nftPositions(
   const claimed = new Set<string>();
   const rows: DefiPositionRow[] = [];
   for (const proto of POSITION_NFT_PROTOCOLS) {
-    let count = 0;
-    for (const mint of scanned) {
-      const res = await rpc<ProgramAccount[]>("getProgramAccounts", [
+    const hits = await mapLimit(scanned, NFT_PROBE_CONCURRENCY, (mint) =>
+      rpc<ProgramAccount[]>("getProgramAccounts", [
         proto.program,
         {
           encoding: "base64",
           dataSlice: { offset: 0, length: 0 },
           filters: [{ memcmp: { offset: proto.mintOffset, bytes: mint } }],
         },
-      ]);
+      ]),
+    );
+    let count = 0;
+    hits.forEach((res, i) => {
       if (res.length > 0) {
         count += 1;
-        claimed.add(mint);
+        claimed.add(scanned[i]);
       }
-    }
+    });
     if (count > 0) {
       rows.push({
         wallet,
@@ -223,28 +245,18 @@ async function nftPositions(
       });
     }
   }
-  return { rows, unmatchedNfts: scanned.filter((m) => !claimed.has(m)).length };
+  return {
+    rows,
+    unmatchedNfts: scanned.filter((m) => !claimed.has(m)).length,
+    unscannedNfts: nftMints.length - scanned.length,
+  };
 }
 
 async function unknownInteractions(wallet: string): Promise<DefiPositionRow[]> {
   const apiKey = process.env.HELIUS_API_KEY;
-  const res = await fetch(
+  const txs = await fetchJSON<Array<{ instructions?: Array<{ programId?: string }> }>>(
     `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${apiKey}&limit=100`,
   );
-  if (!res.ok) {
-    return [
-      {
-        wallet,
-        protocol: "unknown",
-        type: "scan-unavailable",
-        mint: null,
-        symbol: null,
-        valueUsd: null,
-        count: 0,
-      },
-    ];
-  }
-  const txs = (await res.json()) as Array<{ instructions?: Array<{ programId?: string }> }>;
   if (!Array.isArray(txs)) return [];
   const counts = new Map<string, number>();
   for (const tx of txs) {
@@ -274,39 +286,46 @@ const defiCache = new TtlCache<DefiPositionRow[]>(500, 5 * 60 * 1000);
 export async function getDefiPositions(
   wallets: string[],
 ): Promise<{ positions: DefiPositionRow[]; hasUnvalued: boolean }> {
-  const perWallet = await Promise.all(
-    wallets.map(async (wallet) => {
-      const cached = defiCache.get(wallet);
-      if (cached) return cached;
-      const [kamino, ownerRows, nft, unknown] = await Promise.all([
-        kaminoDeposits(wallet),
-        ownerAccountPositions(wallet),
-        nftPositions(wallet),
-        unknownInteractions(wallet),
-      ]);
-      const rows = [...kamino, ...ownerRows, ...nft.rows, ...unknown];
-      if (nft.unmatchedNfts > 0) {
-        rows.push({
-          wallet,
-          protocol: "unknown",
-          type: "unmatched-nft",
-          mint: null,
-          symbol: null,
-          valueUsd: null,
-          count: nft.unmatchedNfts,
-        });
-      }
-      defiCache.set(wallet, rows);
-      return rows;
-    }),
-  );
+  const perWallet = await mapLimit(wallets, WALLET_CONCURRENCY, async (wallet) => {
+    const cached = defiCache.get(wallet);
+    if (cached) return cached;
+    const [kamino, ownerRows, nft, unknown] = await Promise.all([
+      kaminoDeposits(wallet),
+      ownerAccountPositions(wallet),
+      nftPositions(wallet),
+      unknownInteractions(wallet),
+    ]);
+    const rows = [...kamino, ...ownerRows, ...nft.rows, ...unknown];
+    if (nft.unmatchedNfts > 0) {
+      rows.push({
+        wallet,
+        protocol: "unknown",
+        type: "unmatched-nft",
+        mint: null,
+        symbol: null,
+        valueUsd: null,
+        count: nft.unmatchedNfts,
+      });
+    }
+    if (nft.unscannedNfts > 0) {
+      rows.push({
+        wallet,
+        protocol: "unknown",
+        type: "unscanned-nft",
+        mint: null,
+        symbol: null,
+        valueUsd: null,
+        count: nft.unscannedNfts,
+      });
+    }
+    defiCache.set(wallet, rows);
+    return rows;
+  });
   const positions = perWallet
     .flat()
     .sort((a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1));
   return {
     positions,
-    hasUnvalued: positions.some(
-      (p) => p.valueUsd === null && p.protocol !== "unknown",
-    ),
+    hasUnvalued: positions.some((p) => p.valueUsd === null),
   };
 }

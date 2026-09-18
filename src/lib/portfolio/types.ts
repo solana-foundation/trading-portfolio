@@ -92,7 +92,7 @@ export type TradePnLSummary = {
 export type DefiPositionRow = {
   wallet: SolanaAddress;
   protocol: string;
-  type: "deposit" | "position" | "interaction" | "unmatched-nft" | "scan-unavailable";
+  type: "deposit" | "position" | "interaction" | "unmatched-nft" | "unscanned-nft";
   mint: SolanaAddress | null;
   symbol: string | null;
   valueUsd: number | null;
