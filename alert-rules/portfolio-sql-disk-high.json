@@ -1,6 +1,6 @@
 {
-  "uid": "portfolio-sql-cpu-high",
-  "title": "portfolio-sql: CPU > 80% for 15m",
+  "uid": "portfolio-sql-disk-high",
+  "title": "portfolio-sql: disk > 80% for 15m",
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
   "noDataState": "OK",
@@ -31,7 +31,7 @@
             "AND",
             "metric.type",
             "=",
-            "cloudsql.googleapis.com/database/cpu/utilization"
+            "cloudsql.googleapis.com/database/disk/utilization"
           ],
           "alignmentPeriod": "cloud-monitoring-auto",
           "perSeriesAligner": "ALIGN_MEAN",
@@ -99,7 +99,7 @@
   ],
   "condition": "C",
   "annotations": {
-    "summary": "Portfolio Cloud SQL instance CPU has exceeded 80% for 15 minutes."
+    "summary": "Cloud SQL disk utilization above 80% for 15 minutes. Autoresize is on — sustained growth means runaway data or an autoresize quota problem."
   },
   "labels": {
     "service": "trading-portfolio",

@@ -107,6 +107,40 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure notification-policy route (service=trading-portfolio -> alerts-trading)
+        env:
+          GRAFANA_API_URL: ${{ steps.secrets.outputs.GRAFANA_API_URL }}
+          GRAFANA_API_TOKEN: ${{ steps.secrets.outputs.GRAFANA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -o /tmp/policies.json \
+            -H "Authorization: Bearer $GRAFANA_API_TOKEN" \
+            "$GRAFANA_API_URL/api/v1/provisioning/policies"
+          if jq -e '
+            [.routes // [] | .[]
+             | select((.object_matchers // []) == [["service","=","trading-portfolio"]]
+                      and .receiver == "alerts-trading"
+                      and ((.continue // false) == false))]
+            | length > 0' /tmp/policies.json >/dev/null; then
+            echo "route already present"
+            exit 0
+          fi
+          jq '.routes = ([{receiver: "alerts-trading", object_matchers: [["service","=","trading-portfolio"]], continue: false}]
+                + [(.routes // [])[] | select((.object_matchers // []) != [["service","=","trading-portfolio"]])])' \
+            /tmp/policies.json > /tmp/policies-new.json
+          http_code=$(curl -sS -o /tmp/pol-resp.json -w '%{http_code}' \
+            -X PUT "$GRAFANA_API_URL/api/v1/provisioning/policies" \
+            -H "Authorization: Bearer $GRAFANA_API_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -H 'X-Disable-Provenance: true' \
+            --data @/tmp/policies-new.json)
+          if [ "$http_code" -ge 300 ]; then
+            echo "::error::notification policy push failed ($http_code)"
+            cat /tmp/pol-resp.json
+            exit 1
+          fi
+          echo "route added"
+
       - name: Push alert rules
         if: hashFiles('alert-rules/*.json') != ''
         env:

@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     mint: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/).optional(),
   });
   if (!parsed.ok) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
+    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
   }
   const limit = (parsed.body.limit as number | undefined) ?? DEFAULT_LIMIT;
   const cursor = parseCursor(parsed.body.cursor as string | undefined);

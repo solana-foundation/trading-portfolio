@@ -3,7 +3,7 @@ resource "google_cloud_run_v2_service" "api" {
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
 
-  deletion_protection = false
+  deletion_protection = true
 
   template {
     service_account                  = google_service_account.cloud_run_runtime.email
@@ -11,8 +11,16 @@ resource "google_cloud_run_v2_service" "api" {
     max_instance_request_concurrency = 80
 
     scaling {
-      min_instance_count = 0
+      min_instance_count = 1
       max_instance_count = 5
+    }
+
+    vpc_access {
+      egress = "PRIVATE_RANGES_ONLY"
+      network_interfaces {
+        network    = google_compute_network.vpc.id
+        subnetwork = google_compute_subnetwork.cloud_run.id
+      }
     }
 
     volumes {
@@ -38,6 +46,24 @@ resource "google_cloud_run_v2_service" "api" {
         mount_path = "/cloudsql"
       }
 
+      startup_probe {
+        initial_delay_seconds = 3
+        period_seconds        = 5
+        failure_threshold     = 10
+        timeout_seconds       = 3
+        http_get {
+          path = "/api/health"
+        }
+      }
+
+      liveness_probe {
+        period_seconds    = 30
+        failure_threshold = 3
+        timeout_seconds   = 3
+        http_get {
+          path = "/api/health"
+        }
+      }
     }
   }
 

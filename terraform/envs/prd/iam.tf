@@ -58,6 +58,7 @@ resource "google_project_iam_member" "cloudrun_deployer_roles" {
     "roles/cloudsql.client",
     "roles/artifactregistry.writer",
     "roles/iam.serviceAccountUser",
+    "roles/compute.networkUser",
   ])
   project = var.project_id
   role    = each.value

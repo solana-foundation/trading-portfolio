@@ -1,0 +1,6 @@
+FROM alpine:3.20
+RUN apk add --no-cache bash postgresql16-client
+WORKDIR /app
+COPY db ./db
+USER nobody
+ENTRYPOINT ["/app/db/apply.sh"]

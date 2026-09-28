@@ -1,18 +1,18 @@
 {
-  "uid": "portfolio-sql-cpu-high",
-  "title": "portfolio-sql: CPU > 80% for 15m",
+  "uid": "portfolio-api-request-rate-high",
+  "title": "portfolio-api: request rate > 5/s for 10m (runaway caller)",
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
   "noDataState": "OK",
   "execErrState": "Error",
-  "for": "15m",
+  "for": "10m",
   "data": [
     {
       "refId": "A",
       "datasourceUid": "breeze-gcm",
       "queryType": "timeSeriesList",
       "relativeTimeRange": {
-        "from": 900,
+        "from": 600,
         "to": 0
       },
       "model": {
@@ -23,19 +23,19 @@
           "filters": [
             "resource.type",
             "=",
-            "cloudsql_database",
+            "cloud_run_revision",
             "AND",
-            "resource.label.database_id",
+            "resource.label.service_name",
             "=",
-            "trading-portfolio-104696:trading-portfolio-prd",
+            "trading-portfolio-prd-us",
             "AND",
             "metric.type",
             "=",
-            "cloudsql.googleapis.com/database/cpu/utilization"
+            "run.googleapis.com/request_count"
           ],
           "alignmentPeriod": "cloud-monitoring-auto",
-          "perSeriesAligner": "ALIGN_MEAN",
-          "crossSeriesReducer": "REDUCE_MEAN",
+          "perSeriesAligner": "ALIGN_RATE",
+          "crossSeriesReducer": "REDUCE_SUM",
           "groupBys": []
         }
       }
@@ -76,7 +76,7 @@
             "evaluator": {
               "type": "gt",
               "params": [
-                0.8
+                5
               ]
             },
             "operator": {
@@ -99,7 +99,7 @@
   ],
   "condition": "C",
   "annotations": {
-    "summary": "Portfolio Cloud SQL instance CPU has exceeded 80% for 15 minutes."
+    "summary": "Portfolio API request rate exceeded 5 req/s for 10 minutes — likely a runaway caller burning Helius/Birdeye quota."
   },
   "labels": {
     "service": "trading-portfolio",

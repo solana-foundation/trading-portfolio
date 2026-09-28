@@ -1,6 +1,6 @@
 {
-  "uid": "portfolio-sql-cpu-high",
-  "title": "portfolio-sql: CPU > 80% for 15m",
+  "uid": "portfolio-sql-memory-high",
+  "title": "portfolio-sql: memory > 90% for 15m",
   "ruleGroup": "portfolio-api",
   "folderUID": "portfolio",
   "noDataState": "OK",
@@ -31,7 +31,7 @@
             "AND",
             "metric.type",
             "=",
-            "cloudsql.googleapis.com/database/cpu/utilization"
+            "cloudsql.googleapis.com/database/memory/utilization"
           ],
           "alignmentPeriod": "cloud-monitoring-auto",
           "perSeriesAligner": "ALIGN_MEAN",
@@ -76,7 +76,7 @@
             "evaluator": {
               "type": "gt",
               "params": [
-                0.8
+                0.9
               ]
             },
             "operator": {
@@ -99,7 +99,7 @@
   ],
   "condition": "C",
   "annotations": {
-    "summary": "Portfolio Cloud SQL instance CPU has exceeded 80% for 15 minutes."
+    "summary": "Cloud SQL memory utilization above 90% for 15 minutes."
   },
   "labels": {
     "service": "trading-portfolio",
