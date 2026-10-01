@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateSwapEvents,
+  type HeliusTx,
   SOL_MINT,
   synthesizeSwapFromTransfers,
-  type HeliusTx,
 } from "@/lib/portfolio/swaps";
 
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -192,9 +192,7 @@ describe("synthesizeSwapFromTransfers", () => {
       tokenTransfers: [
         { toUserAccount: WALLET, mint: MEME, tokenAmount: 1000 },
       ],
-      nativeTransfers: [
-        { fromUserAccount: WALLET, amount: 2e9 },
-      ],
+      nativeTransfers: [{ fromUserAccount: WALLET, amount: 2e9 }],
     };
     const synth = synthesizeSwapFromTransfers(tx, WALLET);
     expect(synth).not.toBeNull();

@@ -3,8 +3,8 @@ import {
   DAY_SECONDS,
   reconstructDailyBalances,
 } from "@/lib/portfolio/daily-balances";
-import { SOL_MINT } from "@/lib/portfolio/swaps";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
+import { SOL_MINT } from "@/lib/portfolio/swaps";
 
 const W = "walletA";
 const OTHER = "walletB";
@@ -26,13 +26,23 @@ describe("reconstructDailyBalances", () => {
       tx({
         timestamp: TODAY - 3 * DAY_SECONDS + 100,
         tokenTransfers: [
-          { mint: MINT, tokenAmount: 10, fromUserAccount: OTHER, toUserAccount: W },
+          {
+            mint: MINT,
+            tokenAmount: 10,
+            fromUserAccount: OTHER,
+            toUserAccount: W,
+          },
         ],
       }),
       tx({
         timestamp: TODAY - 1 * DAY_SECONDS + 100,
         tokenTransfers: [
-          { mint: MINT, tokenAmount: 4, fromUserAccount: W, toUserAccount: OTHER },
+          {
+            mint: MINT,
+            tokenAmount: 4,
+            fromUserAccount: W,
+            toUserAccount: OTHER,
+          },
         ],
       }),
     ];
@@ -50,7 +60,12 @@ describe("reconstructDailyBalances", () => {
       tx({
         timestamp: TODAY - 3 * DAY_SECONDS + 5,
         tokenTransfers: [
-          { mint: MINT, tokenAmount: 1, fromUserAccount: OTHER, toUserAccount: OTHER },
+          {
+            mint: MINT,
+            tokenAmount: 1,
+            fromUserAccount: OTHER,
+            toUserAccount: OTHER,
+          },
         ],
       }),
       tx({
@@ -60,7 +75,12 @@ describe("reconstructDailyBalances", () => {
         ],
       }),
     ];
-    const days = reconstructDailyBalances(W, new Map([[SOL_MINT, 2]]), txs, TODAY);
+    const days = reconstructDailyBalances(
+      W,
+      new Map([[SOL_MINT, 2]]),
+      txs,
+      TODAY,
+    );
 
     expect(days).toHaveLength(3);
     expect(days[0].balances.has(SOL_MINT)).toBe(false);
@@ -73,7 +93,12 @@ describe("reconstructDailyBalances", () => {
       tx({
         timestamp: TODAY - 1 * DAY_SECONDS + 5,
         tokenTransfers: [
-          { mint: MINT, tokenAmount: 5, fromUserAccount: OTHER, toUserAccount: OTHER },
+          {
+            mint: MINT,
+            tokenAmount: 5,
+            fromUserAccount: OTHER,
+            toUserAccount: OTHER,
+          },
         ],
       }),
     ];

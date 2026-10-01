@@ -41,7 +41,11 @@ export async function parseWalletsBody(
   | { ok: false; error: string; status: 400 | 429 }
 > {
   if (!takeRequestToken()) {
-    return { ok: false, error: "Rate limit exceeded, retry shortly.", status: 429 };
+    return {
+      ok: false,
+      error: "Rate limit exceeded, retry shortly.",
+      status: 429,
+    };
   }
   let payload: unknown;
   try {
@@ -58,6 +62,7 @@ export async function parseWalletsBody(
       status: 400,
     };
   }
-  const { wallets, ...rest } = parsed.data as WalletsBody & Record<string, unknown>;
+  const { wallets, ...rest } = parsed.data as WalletsBody &
+    Record<string, unknown>;
   return { ok: true, wallets, body: rest };
 }

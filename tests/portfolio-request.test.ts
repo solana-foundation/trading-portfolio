@@ -13,7 +13,9 @@ function syntheticWallets(count: number): string[] {
   return Array.from({ length: count }, (_, i) => "1".repeat(31) + BASE58[i]);
 }
 
-function firstMessage(result: z.ZodSafeParseResult<unknown>): string | undefined {
+function firstMessage(
+  result: z.ZodSafeParseResult<unknown>,
+): string | undefined {
   return result.success ? undefined : result.error.issues[0]?.message;
 }
 
@@ -73,17 +75,21 @@ describe("walletsBodySchema", () => {
   });
 
   it("rejects a non-base58 wallet", () => {
-    expect(firstMessage(walletsBodySchema.safeParse({ wallets: ["bad"] }))).toBe(
-      "invalid Solana address",
-    );
+    expect(
+      firstMessage(walletsBodySchema.safeParse({ wallets: ["bad"] })),
+    ).toBe("invalid Solana address");
   });
 
   it("extends with extra fields", () => {
     const schema = walletsBodySchema.extend({
       limit: z.number().int().min(1).max(500).optional(),
     });
-    expect(schema.safeParse({ wallets: [WALLET], limit: 10 }).success).toBe(true);
-    expect(schema.safeParse({ wallets: [WALLET], limit: 0 }).success).toBe(false);
+    expect(schema.safeParse({ wallets: [WALLET], limit: 10 }).success).toBe(
+      true,
+    );
+    expect(schema.safeParse({ wallets: [WALLET], limit: 0 }).success).toBe(
+      false,
+    );
     expect(schema.safeParse({ wallets: [WALLET] }).success).toBe(true);
   });
 });
@@ -91,7 +97,11 @@ describe("walletsBodySchema", () => {
 describe("parseWalletsBody", () => {
   it("returns 400 for malformed JSON", async () => {
     const result = await parseWalletsBody(post("{"));
-    expect(result).toEqual({ ok: false, error: "Invalid JSON body.", status: 400 });
+    expect(result).toEqual({
+      ok: false,
+      error: "Invalid JSON body.",
+      status: 400,
+    });
   });
 
   it("returns 400 with the schema message for an invalid body", async () => {

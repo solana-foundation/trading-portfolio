@@ -1,5 +1,5 @@
-import { SOL_MINT } from "@/lib/portfolio/swaps";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
+import { SOL_MINT } from "@/lib/portfolio/swaps";
 
 export const DAY_SECONDS = 86_400;
 
@@ -56,8 +56,15 @@ export function reconstructDailyBalances(
   const out: DayBalances[] = [];
   let i = 0;
 
-  for (let day = todayDay - DAY_SECONDS; day >= genesisDay; day -= DAY_SECONDS) {
-    while (i < sorted.length && (sorted[i].timestamp || 0) > day + DAY_SECONDS - 1) {
+  for (
+    let day = todayDay - DAY_SECONDS;
+    day >= genesisDay;
+    day -= DAY_SECONDS
+  ) {
+    while (
+      i < sorted.length &&
+      (sorted[i].timestamp || 0) > day + DAY_SECONDS - 1
+    ) {
       undoTx(balances, sorted[i], wallet);
       i++;
     }

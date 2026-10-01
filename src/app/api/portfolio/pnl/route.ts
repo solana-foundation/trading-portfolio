@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
-import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
-import { getAggregateTradePnL, getPortfolioHoldings } from "@/lib/portfolio/pnl";
+import {
+  getAggregateTradePnL,
+  getPortfolioHoldings,
+} from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
+import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,12 +13,19 @@ export const maxDuration = 120;
 export async function POST(request: Request) {
   const parsed = await parseWalletsBody(request);
   if (!parsed.ok) {
-    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+    return NextResponse.json(
+      { error: parsed.error },
+      { status: parsed.status },
+    );
   }
   try {
     const holdings = await getPortfolioHoldings(parsed.wallets);
     const netWorth = holdings.reduce((s, h) => s + h.totalValue, 0);
-    const result = await getAggregateTradePnL(parsed.wallets, holdings, netWorth);
+    const result = await getAggregateTradePnL(
+      parsed.wallets,
+      holdings,
+      netWorth,
+    );
     return NextResponse.json(result);
   } catch (e) {
     if (e instanceof ProviderAuthError) {
