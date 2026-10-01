@@ -37,7 +37,10 @@ export async function POST(request: Request) {
   const parsed = await parseWalletsBody(request, {
     limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
     cursor: z.string().max(400).optional(),
-    mint: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/).optional(),
+    mint: z
+      .string()
+      .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, { error: "invalid mint address" })
+      .optional(),
   });
   if (!parsed.ok) {
     return NextResponse.json({ error: parsed.error }, { status: parsed.status });
