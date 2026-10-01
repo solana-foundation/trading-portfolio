@@ -21,7 +21,7 @@ env:
 
 jobs:
   notify_start:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_sha == github.sha)
     runs-on: ubuntu-latest
     timeout-minutes: 3
     continue-on-error: true
@@ -71,7 +71,7 @@ jobs:
             --data "$PAYLOAD" "$SLACK_WEBHOOK" || true
 
   deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_sha == github.sha)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -198,7 +198,7 @@ jobs:
 
   notify_end:
     needs: [deploy]
-    if: always() && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_sha == github.sha))
     runs-on: ubuntu-latest
     timeout-minutes: 3
     continue-on-error: true

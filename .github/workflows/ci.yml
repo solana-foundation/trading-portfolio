@@ -59,5 +59,9 @@ jobs:
             -H 'content-type: application/json' -d '{}')
           [ "$code" = "400" ]
           grep -q "wallets must be an array" /tmp/body
+          code=$(curl -s -o /tmp/body -w '%{http_code}' -X POST localhost:8080/api/portfolio/value-history \
+            -H 'content-type: application/json' -d '{"wallets":["86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY"]}')
+          [ "$code" = "503" ]
+          ./scripts/smoke.sh http://localhost:8080
           docker logs api
           docker rm -f api
