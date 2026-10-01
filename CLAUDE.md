@@ -13,7 +13,7 @@ Open-source Solana portfolio API. Next.js App Router (API routes only, no UI), T
 
 - **No indexing infrastructure.** Data store + live fetch: history/balances from Helius archival, historical prices/metadata from Birdeye. We own interpretation, never storage. If vendor parsing of a venue is wrong, the fix is a venue-specific parser over raw archival data — not an indexer.
 - **Stateless aggregation**: wallet list in (1–20, base58, zod-validated), merged result out, nothing stored. A single wallet is a portfolio of one. Wallet groupings must never be persisted server-side.
-- `src/lib/portfolio/` — engine (pure where possible): `swaps.ts` (Helius tx parsing, swap synthesis), `pnl.ts` (weighted-average cost basis, household attribution, XIRR), `xirr.ts`, vendor clients (`helius.ts`, `birdeye.ts`), `cache.ts` (in-process TTL only).
+- `src/lib/portfolio/` — engine (pure where possible): `swaps.ts` (Helius tx parsing, swap synthesis), `pnl.ts` (weighted-average cost basis, household attribution, XIRR), `xirr.ts`, vendor clients (`tx-provider.ts`, `birdeye.ts`), `cache.ts` (in-process TTL only).
 - `src/app/api/portfolio/*/route.ts` — thin handlers: validate, call engine, map errors. `runtime = "nodejs"`, `force-dynamic`.
 
 ## Cardinal rules
