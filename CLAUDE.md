@@ -6,6 +6,7 @@ Open-source Solana portfolio API. Next.js App Router (API routes only, no UI), T
 
 - `pnpm dev` — dev server
 - `pnpm typecheck` — tsc strict, must be clean before commit
+- `pnpm lint` — biome check (format + lint), must be clean before commit; `pnpm format` auto-fixes
 - `pnpm test` — vitest (`tests/*.test.ts`, `@/` alias)
 - `pnpm build` — production build
 
