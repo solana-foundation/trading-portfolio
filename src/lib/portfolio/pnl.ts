@@ -7,6 +7,7 @@ import {
 } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { mapLimit } from "@/lib/portfolio/concurrency";
+import { MAX_WALLETS_PER_REQUEST } from "@/lib/portfolio/request";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 import {
   aggregateSwapEvents,
@@ -25,7 +26,7 @@ import type {
 import { type Cashflow, computeXIRR } from "@/lib/portfolio/xirr";
 
 const resultCache = new TtlCache<TradePnLResult>(500, 5 * 60 * 1000);
-const HOLDINGS_CONCURRENCY = 8;
+const HOLDINGS_CONCURRENCY = MAX_WALLETS_PER_REQUEST;
 const TX_FETCH_CONCURRENCY = 4;
 
 export function tradeSortKey(t: TradeHistoryRow): string {

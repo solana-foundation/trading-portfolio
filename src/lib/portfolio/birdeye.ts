@@ -6,7 +6,7 @@ import {
   ProviderAuthError,
   VendorError,
 } from "@/lib/portfolio/errors";
-import { fetchJSON } from "@/lib/portfolio/fetch-json";
+import { type FetchOptions, fetchJSON } from "@/lib/portfolio/fetch-json";
 import { SOL_MINT } from "@/lib/portfolio/swaps";
 import type {
   HiddenReason,
@@ -25,8 +25,8 @@ const CANONICAL_MINTS: Record<string, string> = {
 
 const DUST_THRESHOLD_USD = 0.01;
 const BIRDEYE_CONCURRENCY = 8;
-const TOKEN_LIST_ATTEMPT_TIMEOUT_MS = 25_000;
-const TOKEN_LIST_BUDGET_MS = 50_000;
+const TOKEN_LIST_ATTEMPT_TIMEOUT_MS = 15_000;
+const TOKEN_LIST_BUDGET_MS = 20_000;
 const NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -66,14 +66,16 @@ function birdeyeHeaders(): Record<string, string> {
 function birdeyeFetch<S extends z.ZodType>(
   url: string,
   schema: S,
-  limits: { attemptTimeoutMs?: number; budgetMs?: number } = {},
+  overrides: Partial<
+    Pick<FetchOptions<S>, "attemptTimeoutMs" | "budgetMs" | "gate">
+  > = {},
 ): Promise<z.output<S>> {
   return fetchJSON(url, {
     vendor: "birdeye",
     schema,
     init: { headers: birdeyeHeaders() },
     gate: birdeyeGate,
-    ...limits,
+    ...overrides,
   });
 }
 
@@ -154,6 +156,7 @@ async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
     {
       attemptTimeoutMs: TOKEN_LIST_ATTEMPT_TIMEOUT_MS,
       budgetMs: TOKEN_LIST_BUDGET_MS,
+      gate: undefined,
     },
   );
   return (data.data?.items || []).map((t) => ({
