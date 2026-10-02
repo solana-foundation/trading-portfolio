@@ -98,6 +98,21 @@ describe("getHistoricalPrice", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("treats a body without the success flag as unusable for this call only", async () => {
+    const m = mint();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock
+      .mockResolvedValueOnce(json({}))
+      .mockResolvedValueOnce(json({ data: {} }))
+      .mockResolvedValueOnce(json({ success: true, data: { value: 6 } }));
+    expect(await getHistoricalPrice(m, DAY * 10)).toBeNull();
+    expect(await getHistoricalPrice(m, DAY * 10)).toBeNull();
+    expect(await getHistoricalPrice(m, DAY * 10)).toBe(6);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[0][0])).toContain("kind=shape");
+  });
+
   it("throws after retries on 5xx and does not cache the failure", async () => {
     const m = mint();
     fetchMock

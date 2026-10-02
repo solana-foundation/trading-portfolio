@@ -102,7 +102,7 @@ const tokenListSchema = z.looseObject({
 });
 
 const historicalPriceSchema = z.looseObject({
-  success: z.boolean().nullish(),
+  success: z.boolean(),
   message: z.string().nullish(),
   data: z.looseObject({ value: z.number().nullish() }).nullish(),
 });
@@ -139,7 +139,7 @@ const netWorthSchema = z.looseObject({
 });
 
 const tokenMetaSchema = z.looseObject({
-  success: z.boolean().nullish(),
+  success: z.boolean(),
   data: z
     .looseObject({
       symbol: z.string().nullish(),
@@ -254,8 +254,12 @@ async function fetchHistoricalPrice(
   return null;
 }
 
-function isVendorRefusal(e: unknown): e is VendorError {
-  return e instanceof VendorError && e.vendor === "birdeye" && e.kind === "api";
+function isUnusableAnswer(e: unknown): e is VendorError {
+  return (
+    e instanceof VendorError &&
+    e.vendor === "birdeye" &&
+    (e.kind === "api" || e.kind === "shape")
+  );
 }
 
 export async function getHistoricalPrice(
@@ -271,7 +275,7 @@ export async function getHistoricalPrice(
       negativeTtl,
     );
   } catch (e) {
-    if (!isVendorRefusal(e)) throw e;
+    if (!isUnusableAnswer(e)) throw e;
     console.warn(`portfolio: ${describeError(e)}`);
     return null;
   }
