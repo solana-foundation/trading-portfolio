@@ -12,6 +12,7 @@ import {
   reconstructDailyBalances,
 } from "@/lib/portfolio/daily-balances";
 import { getPool } from "@/lib/portfolio/db";
+import { describeError } from "@/lib/portfolio/errors";
 import { SOL_MINT, STABLECOIN_MINTS } from "@/lib/portfolio/swaps";
 import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 
@@ -39,6 +40,21 @@ export type ValueHistoryResult = {
 
 function isoDay(day: number): string {
   return new Date(day * 1000).toISOString().slice(0, 10);
+}
+
+export async function withTransaction<T>(
+  client: Pick<PoolClient, "query">,
+  fn: () => Promise<T>,
+): Promise<T> {
+  await client.query("BEGIN");
+  try {
+    const result = await fn();
+    await client.query("COMMIT");
+    return result;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  }
 }
 
 async function pricesFor(
@@ -192,6 +208,8 @@ async function syncWalletLocked(
         (d) => d.day > storedMaxDay || incompleteDaySet.has(d.day),
       );
     }
+    const dayValues: string[] = [];
+    const dayParams: unknown[] = [wallet];
     if (days.length > 0) {
       const mintValue = new Map<string, number>();
       for (const t of holdings.tokens) mintValue.set(t.address, t.value);
@@ -213,8 +231,6 @@ async function syncWalletLocked(
         toDay,
       );
 
-      const values: string[] = [];
-      const params: unknown[] = [wallet];
       for (const d of days) {
         let value = 0;
         let complete = true;
@@ -227,34 +243,36 @@ async function syncWalletLocked(
           }
           value += amount * p;
         }
-        params.push(d.day, value, complete);
-        values.push(
-          `($1, to_timestamp($${params.length - 2})::date, $${params.length - 1}, 'engine', $${params.length})`,
+        dayParams.push(d.day, value, complete);
+        dayValues.push(
+          `($1, to_timestamp($${dayParams.length - 2})::date, $${dayParams.length - 1}, 'engine', $${dayParams.length})`,
         );
       }
-      if (values.length > 0) {
+    }
+    backfilledNow = !wasBackfilled;
+    await withTransaction(client, async () => {
+      if (dayValues.length > 0) {
         await client.query(
           `INSERT INTO wallet_value_daily (wallet, day, value_usd, source, complete)
-           VALUES ${values.join(",")}
+           VALUES ${dayValues.join(",")}
            ON CONFLICT (wallet, day) DO UPDATE
              SET value_usd = EXCLUDED.value_usd,
                  source = EXCLUDED.source,
                  complete = EXCLUDED.complete
            WHERE NOT wallet_value_daily.complete`,
-          params,
+          dayParams,
         );
       }
-    }
-    backfilledNow = !wasBackfilled;
-    await client.query(
-      `UPDATE wallet_sync
-          SET backfilled = true,
-              truncated = $2,
-              genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
-              updated_at = now()
-        WHERE wallet = $1`,
-      [wallet, truncated],
-    );
+      await client.query(
+        `UPDATE wallet_sync
+            SET backfilled = true,
+                truncated = $2,
+                genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
+                updated_at = now()
+          WHERE wallet = $1`,
+        [wallet, truncated],
+      );
+    });
   }
 
   if (truncated) {
@@ -285,19 +303,21 @@ async function syncWalletLocked(
           );
         }
         if (values.length > 0) {
-          await client.query(
-            `INSERT INTO wallet_value_daily (wallet, day, value_usd, source, complete)
-             VALUES ${values.join(",")}
-             ON CONFLICT (wallet, day) DO NOTHING`,
-            params,
-          );
-          await client.query(
-            `UPDATE wallet_sync
-                SET genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
-                    updated_at = now()
-              WHERE wallet = $1`,
-            [wallet],
-          );
+          await withTransaction(client, async () => {
+            await client.query(
+              `INSERT INTO wallet_value_daily (wallet, day, value_usd, source, complete)
+               VALUES ${values.join(",")}
+               ON CONFLICT (wallet, day) DO NOTHING`,
+              params,
+            );
+            await client.query(
+              `UPDATE wallet_sync
+                  SET genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
+                      updated_at = now()
+                WHERE wallet = $1`,
+              [wallet],
+            );
+          });
         }
       }
     }
@@ -327,12 +347,13 @@ async function syncWalletLocked(
   };
 }
 
-async function syncWallet(
+async function syncWalletExclusive(
   wallet: string,
   todayDay: number,
 ): Promise<SyncOutcome> {
   const pool = getPool();
   const client = await pool.connect();
+  let lockStateUnknown = false;
   try {
     await client.query("SELECT pg_advisory_lock(hashtext($1))", [wallet]);
     try {
@@ -340,11 +361,25 @@ async function syncWallet(
     } finally {
       await client
         .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
-        .catch(() => {});
+        .catch(() => {
+          lockStateUnknown = true;
+        });
     }
   } finally {
-    client.release();
+    client.release(lockStateUnknown);
   }
+}
+
+const syncInFlight = new Map<string, Promise<SyncOutcome>>();
+
+function syncWallet(wallet: string, todayDay: number): Promise<SyncOutcome> {
+  const inFlight = syncInFlight.get(wallet);
+  if (inFlight) return inFlight;
+  const p = syncWalletExclusive(wallet, todayDay).finally(() =>
+    syncInFlight.delete(wallet),
+  );
+  syncInFlight.set(wallet, p);
+  return p;
 }
 
 export async function getValueHistory(
@@ -378,7 +413,7 @@ export async function getValueHistory(
   }));
 
   void cleanupStale().catch((e) =>
-    console.error("portfolio: stale cleanup failed:", (e as Error).message),
+    console.error("portfolio: stale cleanup failed:", describeError(e)),
   );
 
   return { series, todayValueUsd, wallets: metas, partial, hasUnpricedDays };
