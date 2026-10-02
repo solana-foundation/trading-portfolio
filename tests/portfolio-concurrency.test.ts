@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { createLimiter, mapLimit } from "@/lib/portfolio/concurrency";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createLimiter,
+  mapLimit,
+  QueueTimeoutError,
+} from "@/lib/portfolio/concurrency";
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -122,6 +126,26 @@ describe("createLimiter", () => {
       }),
     ).rejects.toThrow("fail");
     expect(await limit(async () => "ok")).toBe("ok");
+  });
+
+  it("rejects a waiter whose queue timeout elapses and leaves the slot to others", async () => {
+    vi.useFakeTimers();
+    try {
+      const limit = createLimiter(1);
+      const first = deferred<void>();
+      const held = limit(() => first.promise);
+      const timedOut = expect(
+        limit(async () => "never", { queueTimeoutMs: 100 }),
+      ).rejects.toBeInstanceOf(QueueTimeoutError);
+      const patient = limit(async () => "ran");
+      await vi.advanceTimersByTimeAsync(100);
+      await timedOut;
+      first.resolve();
+      await held;
+      expect(await patient).toBe("ran");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs waiters in FIFO order", async () => {

@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Limiter } from "@/lib/portfolio/concurrency";
+import { type Limiter, QueueTimeoutError } from "@/lib/portfolio/concurrency";
 import {
   ProviderAuthError,
   type Vendor,
@@ -188,13 +188,27 @@ export async function fetchJSON<S extends z.ZodType>(
   const started = Date.now();
   let lastError: VendorError | undefined;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (budgetMs - (Date.now() - started) <= 0) break;
-    const result = await gate(() => {
-      const remaining = budgetMs - (Date.now() - started);
-      if (remaining <= 0) {
-        return Promise.resolve(budgetExhausted(opts.vendor, path, budgetMs));
+    const beforeQueue = budgetMs - (Date.now() - started);
+    if (beforeQueue <= 0) break;
+    const result = await gate(
+      () => {
+        const remaining = budgetMs - (Date.now() - started);
+        if (remaining <= 0) {
+          return Promise.resolve(budgetExhausted(opts.vendor, path, budgetMs));
+        }
+        return runAttempt(
+          url,
+          path,
+          opts,
+          Math.min(attemptTimeoutMs, remaining),
+        );
+      },
+      { queueTimeoutMs: beforeQueue },
+    ).catch((e: unknown) => {
+      if (e instanceof QueueTimeoutError) {
+        return budgetExhausted(opts.vendor, path, budgetMs);
       }
-      return runAttempt(url, path, opts, Math.min(attemptTimeoutMs, remaining));
+      throw e;
     });
     if (result.ok) return result.value;
     lastError = result.error;
