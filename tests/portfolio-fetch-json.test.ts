@@ -224,6 +224,32 @@ describe("fetchJSON", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("counts time spent waiting for the gate against the budget", async () => {
+    const gate = createLimiter(1);
+    let release!: () => void;
+    const held = gate(
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+        }),
+    );
+    const p = fetchJSON(URL_, {
+      vendor: "birdeye",
+      schema,
+      gate,
+      budgetMs: 1_000,
+    }).catch((e) => e);
+    await flush();
+    vi.advanceTimersByTime(1_500);
+    release();
+    const err = await settle(p);
+    expect(err).toBeInstanceOf(VendorError);
+    expect(err.kind).toBe("timeout");
+    expect(err.message).toContain("waiting for a vendor slot");
+    expect(fetchMock).not.toHaveBeenCalled();
+    await held;
+  });
+
   it("honours attempts", async () => {
     fetchMock.mockResolvedValue(json({}, 500));
     const err = await settle(

@@ -51,6 +51,22 @@ function sleep(ms: number): Promise<void> {
 
 type Attempt<T> = { ok: true; value: T } | { ok: false; error: VendorError };
 
+function budgetExhausted(
+  vendor: Vendor,
+  path: string,
+  budgetMs: number,
+): Attempt<never> {
+  return {
+    ok: false,
+    error: new VendorError({
+      vendor,
+      kind: "timeout",
+      path,
+      message: `request budget of ${budgetMs}ms exhausted while waiting for a vendor slot for ${path}`,
+    }),
+  };
+}
+
 async function runAttempt<S extends z.ZodType>(
   url: string,
   path: string,
@@ -166,11 +182,14 @@ export async function fetchJSON<S extends z.ZodType>(
   const started = Date.now();
   let lastError: VendorError | undefined;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const remaining = budgetMs - (Date.now() - started);
-    if (remaining <= 0) break;
-    const result = await gate(() =>
-      runAttempt(url, path, opts, Math.min(attemptTimeoutMs, remaining)),
-    );
+    if (budgetMs - (Date.now() - started) <= 0) break;
+    const result = await gate(() => {
+      const remaining = budgetMs - (Date.now() - started);
+      if (remaining <= 0) {
+        return Promise.resolve(budgetExhausted(opts.vendor, path, budgetMs));
+      }
+      return runAttempt(url, path, opts, Math.min(attemptTimeoutMs, remaining));
+    });
     if (result.ok) return result.value;
     lastError = result.error;
     if (!result.error.retryable || attempt === attempts - 1) break;
