@@ -307,7 +307,7 @@ async function ownerAccountPositions(
 async function nftPositions(
   wallet: string,
   signal: AbortSignal,
-): Promise<DefiPositionRow[]> {
+): Promise<{ rows: DefiPositionRow[]; degraded: boolean }> {
   const nftMints: string[] = [];
   for (const programId of TOKEN_PROGRAMS) {
     const res = await rpc(
@@ -325,6 +325,7 @@ async function nftPositions(
   }
   const scanned = nftMints.slice(0, NFT_SCAN_CAP);
   const claimed = new Set<string>();
+  const unprobed = new Set<string>();
   const rows: DefiPositionRow[] = [];
   for (const proto of POSITION_NFT_PROTOCOLS) {
     const hits = await mapLimit(scanned, NFT_PROBE_CONCURRENCY, (mint) =>
@@ -340,10 +341,20 @@ async function nftPositions(
         ],
         programAccountsSchema,
         signal,
-      ),
+      ).catch((e: unknown) => {
+        if (!isDegradable(e)) throw e;
+        console.warn(
+          `portfolio: defi probe ${proto.name} failed for ${mint.slice(0, 4)}…: ${describeError(e)}`,
+        );
+        return null;
+      }),
     );
     let count = 0;
     hits.forEach((res, i) => {
+      if (res === null) {
+        unprobed.add(scanned[i]);
+        return;
+      }
       if (res.length > 0) {
         count += 1;
         claimed.add(scanned[i]);
@@ -361,8 +372,10 @@ async function nftPositions(
       });
     }
   }
-  const unmatchedNfts = scanned.filter((m) => !claimed.has(m)).length;
-  const unscannedNfts = nftMints.length - scanned.length;
+  const unmatchedNfts = scanned.filter(
+    (m) => !claimed.has(m) && !unprobed.has(m),
+  ).length;
+  const unscannedNfts = nftMints.length - scanned.length + unprobed.size;
   if (unmatchedNfts > 0) {
     rows.push({
       wallet,
@@ -385,7 +398,7 @@ async function nftPositions(
       count: unscannedNfts,
     });
   }
-  return rows;
+  return { rows, degraded: unprobed.size > 0 };
 }
 
 const interactionsSchema = z.array(
@@ -455,16 +468,19 @@ function isDegradable(e: unknown): boolean {
 async function scanWallet(wallet: string): Promise<WalletScan> {
   const controller = new AbortController();
   const { signal } = controller;
-  const sources: Array<[DefiScanSource, () => Promise<DefiPositionRow[]>]> = [
-    ["kamino-lend", () => kaminoDeposits(wallet, signal)],
-    ["owner-accounts", () => ownerAccountPositions(wallet, signal)],
+  type SourceResult = { rows: DefiPositionRow[]; degraded: boolean };
+  const whole = (p: Promise<DefiPositionRow[]>): Promise<SourceResult> =>
+    p.then((rows) => ({ rows, degraded: false }));
+  const sources: Array<[DefiScanSource, () => Promise<SourceResult>]> = [
+    ["kamino-lend", () => whole(kaminoDeposits(wallet, signal))],
+    ["owner-accounts", () => whole(ownerAccountPositions(wallet, signal))],
     ["position-nfts", () => nftPositions(wallet, signal)],
-    ["interactions", () => unknownInteractions(wallet, signal)],
+    ["interactions", () => whole(unknownInteractions(wallet, signal))],
   ];
   const outcomes = await Promise.all(
     sources.map(([source, run]) =>
       run().then(
-        (rows) => ({ source, rows }),
+        (result) => ({ source, rows: result.rows, degraded: result.degraded }),
         (e: unknown) => {
           if (!isDegradable(e)) {
             controller.abort();
@@ -473,7 +489,7 @@ async function scanWallet(wallet: string): Promise<WalletScan> {
           console.warn(
             `portfolio: defi source ${source} unavailable for ${wallet.slice(0, 4)}…: ${describeError(e)}`,
           );
-          return { source, rows: null };
+          return { source, rows: null, degraded: true };
         },
       ),
     ),
@@ -482,7 +498,7 @@ async function scanWallet(wallet: string): Promise<WalletScan> {
   const failed: DefiScanFailure[] = [];
   for (const outcome of outcomes) {
     if (outcome.rows) rows.push(...outcome.rows);
-    else failed.push({ wallet, source: outcome.source });
+    if (outcome.degraded) failed.push({ wallet, source: outcome.source });
   }
   return { rows, failed };
 }

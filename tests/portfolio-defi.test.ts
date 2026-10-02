@@ -175,6 +175,34 @@ describe("getDefiPositions", () => {
     ]);
   });
 
+  it("keeps successful NFT detections when one probe fails, counting it as unscanned", async () => {
+    const w = wallet();
+    install((_url, rpc) => {
+      if (rpc?.method === "getTokenAccountsByOwner") {
+        const programId = (rpc.params[1] as { programId: string }).programId;
+        return programId.startsWith("Tokenkeg")
+          ? json({ result: { value: [nftAccount(NFT_A), nftAccount(NFT_B)] } })
+          : json({ result: { value: [] } });
+      }
+      if (
+        rpc?.method === "getProgramAccounts" &&
+        programOf(rpc) === WHIRLPOOL
+      ) {
+        if (memcmpBytes(rpc) === NFT_A)
+          return json({ result: [sliced("pos")] });
+        if (memcmpBytes(rpc) === NFT_B) return json({}, 503);
+      }
+      return undefined;
+    });
+    const result = await settle(getDefiPositions([w]));
+    expect(result.partial).toBe(true);
+    expect(result.failed).toEqual([{ wallet: w, source: "position-nfts" }]);
+    expect(result.positions.map((p) => [p.protocol, p.type, p.count])).toEqual([
+      ["orca-whirlpool", "position", 1],
+      ["unknown", "unscanned-nft", 1],
+    ]);
+  });
+
   it("degrades one failed source to partial, keeps the rest, and does not cache", async () => {
     const w = wallet();
     install((url, rpc) => {
