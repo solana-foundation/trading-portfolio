@@ -5,12 +5,18 @@ export async function mapLimit<T, R>(
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
+  let failed = false;
   const workers = Math.max(1, Math.min(limit, items.length));
   await Promise.all(
     Array.from({ length: workers }, async () => {
-      while (next < items.length) {
+      while (!failed && next < items.length) {
         const i = next++;
-        results[i] = await fn(items[i], i);
+        try {
+          results[i] = await fn(items[i], i);
+        } catch (e) {
+          failed = true;
+          throw e;
+        }
       }
     }),
   );

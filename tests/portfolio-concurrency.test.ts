@@ -51,6 +51,30 @@ describe("mapLimit", () => {
     ).rejects.toThrow("boom");
   });
 
+  it("stops claiming items after the first failure", async () => {
+    const started: number[] = [];
+    const gates = new Map<number, ReturnType<typeof deferred<void>>>();
+    const run = mapLimit(
+      Array.from({ length: 10 }, (_, i) => i),
+      2,
+      async (i) => {
+        started.push(i);
+        const gate = deferred<void>();
+        gates.set(i, gate);
+        await gate.promise;
+        if (i === 1) throw new Error("boom");
+        return i;
+      },
+    );
+    await Promise.resolve();
+    expect(started).toEqual([0, 1]);
+    gates.get(1)?.resolve();
+    await expect(run).rejects.toThrow("boom");
+    gates.get(0)?.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(started).toEqual([0, 1]);
+  });
+
   it("returns an empty array for empty input", async () => {
     let calls = 0;
     const result = await mapLimit([], 4, async () => {
