@@ -40,9 +40,12 @@ export function createLimiter(maxInFlight: number): Limiter {
   let inFlight = 0;
   const waiting: Array<() => void> = [];
   const release = () => {
+    inFlight -= 1;
     const nextWaiter = waiting.shift();
-    if (nextWaiter) nextWaiter();
-    else inFlight -= 1;
+    if (nextWaiter) {
+      inFlight += 1;
+      nextWaiter();
+    }
   };
   const acquire = (queueTimeoutMs?: number) =>
     new Promise<void>((resolve, reject) => {
