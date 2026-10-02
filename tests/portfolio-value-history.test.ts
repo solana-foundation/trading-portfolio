@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import { withTransaction } from "@/lib/portfolio/value-history";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  acquireWalletLock,
+  withTransaction,
+} from "@/lib/portfolio/value-history";
 
 function fakeClient(failOn?: string) {
   const calls: string[] = [];
@@ -48,5 +51,39 @@ describe("withTransaction", () => {
     await expect(
       withTransaction(client as never, async () => 1),
     ).rejects.toThrow("fail COMMIT");
+  });
+});
+
+describe("acquireWalletLock", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("polls the try-lock until it is granted", async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ locked: false }] })
+      .mockResolvedValueOnce({ rows: [{ locked: false }] })
+      .mockResolvedValueOnce({ rows: [{ locked: true }] });
+    const p = acquireWalletLock({ query } as never, "wallet", 10_000);
+    await vi.runAllTimersAsync();
+    await p;
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(String(query.mock.calls[0][0])).toContain("pg_try_advisory_lock");
+  });
+
+  it("gives up after the deadline", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ locked: false }] });
+    const p = acquireWalletLock({ query } as never, "wallet", 1_200).catch(
+      (e) => e,
+    );
+    await vi.runAllTimersAsync();
+    const err = await p;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("waiting for the sync lock");
+    expect(query.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 });
