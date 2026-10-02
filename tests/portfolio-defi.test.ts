@@ -230,6 +230,33 @@ describe("getDefiPositions", () => {
     expect(result.failed).toEqual([{ wallet: w, source: "owner-accounts" }]);
   });
 
+  it("fails fast on a fatal source without waiting for slow siblings", async () => {
+    let releaseSibling!: () => void;
+    const siblingDone = new Promise<void>((r) => {
+      releaseSibling = r;
+    });
+    install((url, rpc) => {
+      if (url.startsWith("https://api.helius.xyz/")) return json({}, 401);
+      if (rpc?.method === "getTokenAccountsByOwner") {
+        return new Promise<Response>((resolve) => {
+          siblingDone.then(() => resolve(json({ result: { value: [] } })));
+        }) as unknown as Response;
+      }
+      return undefined;
+    });
+    let settled = false;
+    const p = getDefiPositions([wallet()])
+      .catch((e) => e)
+      .then((e) => {
+        settled = true;
+        return e;
+      });
+    await settle(Promise.resolve());
+    expect(settled).toBe(true);
+    expect(await p).toBeInstanceOf(ProviderAuthError);
+    releaseSibling();
+  });
+
   it("rethrows auth failures instead of degrading", async () => {
     install((url) =>
       url.startsWith("https://api.helius.xyz/") ? json({}, 401) : undefined,

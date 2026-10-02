@@ -442,21 +442,25 @@ async function scanWallet(wallet: string): Promise<WalletScan> {
     ["position-nfts", () => nftPositions(wallet)],
     ["interactions", () => unknownInteractions(wallet)],
   ];
-  const settled = await Promise.allSettled(sources.map(([, run]) => run()));
+  const outcomes = await Promise.all(
+    sources.map(([source, run]) =>
+      run().then(
+        (rows) => ({ source, rows }),
+        (e: unknown) => {
+          if (!isDegradable(e)) throw e;
+          console.warn(
+            `portfolio: defi source ${source} unavailable for ${wallet.slice(0, 4)}…: ${describeError(e)}`,
+          );
+          return { source, rows: null };
+        },
+      ),
+    ),
+  );
   const rows: DefiPositionRow[] = [];
   const failed: DefiScanFailure[] = [];
-  for (let i = 0; i < settled.length; i++) {
-    const outcome = settled[i];
-    if (outcome.status === "fulfilled") {
-      rows.push(...outcome.value);
-      continue;
-    }
-    if (!isDegradable(outcome.reason)) throw outcome.reason;
-    const source = sources[i][0];
-    failed.push({ wallet, source });
-    console.warn(
-      `portfolio: defi source ${source} unavailable for ${wallet.slice(0, 4)}…: ${describeError(outcome.reason)}`,
-    );
+  for (const outcome of outcomes) {
+    if (outcome.rows) rows.push(...outcome.rows);
+    else failed.push({ wallet, source: outcome.source });
   }
   return { rows, failed };
 }
