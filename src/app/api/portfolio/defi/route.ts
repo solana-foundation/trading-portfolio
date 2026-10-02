@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDefiPositions } from "@/lib/portfolio/defi";
+import { mapError } from "@/lib/portfolio/errors";
 import { parseWalletsBody } from "@/lib/portfolio/request";
 
 export const runtime = "nodejs";
@@ -18,10 +19,10 @@ export async function POST(request: Request) {
     const result = await getDefiPositions(parsed.wallets);
     return NextResponse.json(result);
   } catch (e) {
-    console.error("portfolio: defi failed:", (e as Error).message);
+    const mapped = mapError(e, "Failed to load DeFi positions.");
     return NextResponse.json(
-      { error: "Failed to load DeFi positions." },
-      { status: 502 },
+      { error: mapped.error },
+      { status: mapped.status },
     );
   }
 }

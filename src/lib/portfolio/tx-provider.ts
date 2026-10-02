@@ -1,5 +1,6 @@
 import { TtlCache } from "@/lib/portfolio/cache";
 import { mapLimit } from "@/lib/portfolio/concurrency";
+import { ProviderAuthError, type Vendor } from "@/lib/portfolio/errors";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 
@@ -20,17 +21,10 @@ export type TxFetchResult = {
 
 const txCache = new TtlCache<TxFetchResult>(1_000, 60 * 60 * 1000);
 
-export class ProviderAuthError extends Error {
-  constructor(msg: string) {
-    super(msg);
-    this.name = "ProviderAuthError";
-  }
-}
-
 type ErrorResp = { error?: { code?: number; message?: string } };
 
 type TxProvider = {
-  name: string;
+  name: Vendor;
   pageUrl: (wallet: string, before: string | null) => string | null;
 };
 
@@ -75,14 +69,24 @@ async function fetchFromProvider(
   let truncated = true;
   for (let i = 0; i < maxPages; i++) {
     const url = provider.pageUrl(wallet, before);
-    if (!url) throw new ProviderAuthError(`${provider.name} is not configured`);
+    if (!url) {
+      throw new ProviderAuthError({
+        vendor: provider.name,
+        path: "env",
+        message: `${provider.name} is not configured`,
+      });
+    }
     let page: HeliusTx[] | ErrorResp;
     try {
       page = await fetchJSON(url);
     } catch (e) {
       const msg = (e as Error).message;
       if (/HTTP (401|403)/.test(msg)) {
-        throw new ProviderAuthError(`${provider.name}: ${msg}`);
+        throw new ProviderAuthError({
+          vendor: provider.name,
+          path: new URL(url).pathname,
+          message: `${provider.name}: ${msg}`,
+        });
       }
       throw new Error(
         `${provider.name} fetch failed for ${wallet.slice(0, 4)}…: ${msg}`,
@@ -92,7 +96,11 @@ async function fetchFromProvider(
       const errResp = page as ErrorResp;
       const msg = errResp.error?.message || JSON.stringify(errResp.error);
       if (isAuthError(errResp.error?.code, msg)) {
-        throw new ProviderAuthError(`${provider.name}: ${msg}`);
+        throw new ProviderAuthError({
+          vendor: provider.name,
+          path: new URL(url).pathname,
+          message: `${provider.name}: ${msg}`,
+        });
       }
       throw new Error(
         `${provider.name} API error for ${wallet.slice(0, 4)}…: ${msg}`,
@@ -122,9 +130,12 @@ async function fetchForAddress(
 ): Promise<TxFetchResult> {
   const configured = PROVIDERS.filter((p) => p.pageUrl(address, null) !== null);
   if (configured.length === 0) {
-    throw new ProviderAuthError(
-      "No transaction provider configured (set HELIUS_API_KEY or TRITON_API_URL)",
-    );
+    throw new ProviderAuthError({
+      vendor: "helius",
+      path: "env",
+      message:
+        "No transaction provider configured (set HELIUS_API_KEY or TRITON_API_URL)",
+    });
   }
 
   const failures: string[] = [];
@@ -138,7 +149,13 @@ async function fetchForAddress(
     }
   }
   const summary = failures.join("; ");
-  if (allAuthFailures) throw new ProviderAuthError(summary);
+  if (allAuthFailures) {
+    throw new ProviderAuthError({
+      vendor: configured[0].name,
+      path: "/v0/addresses",
+      message: summary,
+    });
+  }
   throw new Error(`All transaction providers failed: ${summary}`);
 }
 
@@ -166,7 +183,11 @@ async function getTokenAccounts(wallet: string): Promise<string[]> {
     if (resp.error) {
       const msg = resp.error.message || JSON.stringify(resp.error);
       if (isAuthError(resp.error.code, msg)) {
-        throw new ProviderAuthError(`helius rpc: ${msg}`);
+        throw new ProviderAuthError({
+          vendor: "helius",
+          path: "getTokenAccountsByOwner",
+          message: `helius rpc: ${msg}`,
+        });
       }
       throw new Error(
         `helius rpc getTokenAccountsByOwner failed for ${wallet.slice(0, 4)}…: ${msg}`,

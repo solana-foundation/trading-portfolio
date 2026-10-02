@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
+import { mapError } from "@/lib/portfolio/errors";
 import {
   getAggregateTradePnL,
   getPortfolioHoldings,
 } from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
-import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,17 +39,10 @@ export async function POST(request: Request) {
       historyTruncated: result.historyTruncated,
     });
   } catch (e) {
-    if (e instanceof ProviderAuthError) {
-      console.error("portfolio: provider auth failed:", e.message);
-      return NextResponse.json(
-        { error: "Upstream data provider unavailable." },
-        { status: 502 },
-      );
-    }
-    console.error("portfolio: summary failed:", (e as Error).message);
+    const mapped = mapError(e, "Failed to compute portfolio summary.");
     return NextResponse.json(
-      { error: "Failed to compute portfolio summary." },
-      { status: 502 },
+      { error: mapped.error },
+      { status: mapped.status },
     );
   }
 }

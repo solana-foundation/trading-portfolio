@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { classifyHolding } from "@/lib/portfolio/birdeye";
+import { mapError } from "@/lib/portfolio/errors";
 import { getPortfolioHoldings } from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
 import type { TokenHolding } from "@/lib/portfolio/types";
@@ -61,10 +62,10 @@ export async function POST(request: Request) {
       },
     });
   } catch (e) {
-    console.error("portfolio: holdings failed:", (e as Error).message);
+    const mapped = mapError(e, "Failed to load holdings.");
     return NextResponse.json(
-      { error: "Failed to load holdings." },
-      { status: 502 },
+      { error: mapped.error },
+      { status: mapped.status },
     );
   }
 }

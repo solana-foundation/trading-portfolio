@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { mapError } from "@/lib/portfolio/errors";
 import {
   getAggregateTradePnL,
   getPortfolioHoldings,
   tradeSortKey,
 } from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
-import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 import type { TradeHistoryRow } from "@/lib/portfolio/types";
 
 export const runtime = "nodejs";
@@ -77,17 +77,10 @@ export async function POST(request: Request) {
           : null,
     });
   } catch (e) {
-    if (e instanceof ProviderAuthError) {
-      console.error("portfolio: provider auth failed:", e.message);
-      return NextResponse.json(
-        { error: "Upstream data provider unavailable." },
-        { status: 502 },
-      );
-    }
-    console.error("portfolio: trades failed:", (e as Error).message);
+    const mapped = mapError(e, "Failed to load trade history.");
     return NextResponse.json(
-      { error: "Failed to load trade history." },
-      { status: 502 },
+      { error: mapped.error },
+      { status: mapped.status },
     );
   }
 }
