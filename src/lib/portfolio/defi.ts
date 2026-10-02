@@ -326,47 +326,44 @@ async function unknownInteractions(wallet: string): Promise<DefiPositionRow[]> {
 
 const defiCache = new TtlCache<DefiPositionRow[]>(500, 5 * 60 * 1000);
 
+async function scanWallet(wallet: string): Promise<DefiPositionRow[]> {
+  const [kamino, ownerRows, nft, unknown] = await Promise.all([
+    kaminoDeposits(wallet),
+    ownerAccountPositions(wallet),
+    nftPositions(wallet),
+    unknownInteractions(wallet),
+  ]);
+  const rows = [...kamino, ...ownerRows, ...nft.rows, ...unknown];
+  if (nft.unmatchedNfts > 0) {
+    rows.push({
+      wallet,
+      protocol: "unknown",
+      type: "unmatched-nft",
+      mint: null,
+      symbol: null,
+      valueUsd: null,
+      count: nft.unmatchedNfts,
+    });
+  }
+  if (nft.unscannedNfts > 0) {
+    rows.push({
+      wallet,
+      protocol: "unknown",
+      type: "unscanned-nft",
+      mint: null,
+      symbol: null,
+      valueUsd: null,
+      count: nft.unscannedNfts,
+    });
+  }
+  return rows;
+}
+
 export async function getDefiPositions(
   wallets: string[],
 ): Promise<{ positions: DefiPositionRow[]; hasUnvalued: boolean }> {
-  const perWallet = await mapLimit(
-    wallets,
-    WALLET_CONCURRENCY,
-    async (wallet) => {
-      const cached = defiCache.get(wallet);
-      if (cached) return cached;
-      const [kamino, ownerRows, nft, unknown] = await Promise.all([
-        kaminoDeposits(wallet),
-        ownerAccountPositions(wallet),
-        nftPositions(wallet),
-        unknownInteractions(wallet),
-      ]);
-      const rows = [...kamino, ...ownerRows, ...nft.rows, ...unknown];
-      if (nft.unmatchedNfts > 0) {
-        rows.push({
-          wallet,
-          protocol: "unknown",
-          type: "unmatched-nft",
-          mint: null,
-          symbol: null,
-          valueUsd: null,
-          count: nft.unmatchedNfts,
-        });
-      }
-      if (nft.unscannedNfts > 0) {
-        rows.push({
-          wallet,
-          protocol: "unknown",
-          type: "unscanned-nft",
-          mint: null,
-          symbol: null,
-          valueUsd: null,
-          count: nft.unscannedNfts,
-        });
-      }
-      defiCache.set(wallet, rows);
-      return rows;
-    },
+  const perWallet = await mapLimit(wallets, WALLET_CONCURRENCY, (wallet) =>
+    defiCache.getOrFetch(wallet, () => scanWallet(wallet)),
   );
   const positions = perWallet
     .flat()

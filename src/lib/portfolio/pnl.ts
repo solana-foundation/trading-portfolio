@@ -97,7 +97,7 @@ export async function getPortfolioHoldings(
   return Promise.all(wallets.map((w) => getHoldings(w)));
 }
 
-export async function getAggregateTradePnL(
+export function getAggregateTradePnL(
   wallets: string[],
   holdings: Holdings[],
   netWorthUsd?: number,
@@ -112,9 +112,16 @@ export async function getAggregateTradePnL(
     )
     .digest("hex");
   const cacheKey = `${[...wallets].sort().join(",")}:${holdingsFp}`;
-  const cached = resultCache.get(cacheKey);
-  if (cached) return cached;
+  return resultCache.getOrFetch(cacheKey, () =>
+    computeAggregateTradePnL(wallets, holdings, netWorthUsd),
+  );
+}
 
+async function computeAggregateTradePnL(
+  wallets: string[],
+  holdings: Holdings[],
+  netWorthUsd?: number,
+): Promise<TradePnLResult> {
   const txFetches = await Promise.all(wallets.map((w) => fetchTransactions(w)));
   const txsPerWallet = txFetches.map((f) => f.txs);
   const historyTruncated = txFetches.some((f) => f.truncated);
@@ -671,7 +678,7 @@ export async function getAggregateTradePnL(
       avgCostPerToken: m.totalSpent / m.totalBought,
     }));
 
-  const result: TradePnLResult = {
+  return {
     perWallet,
     mintCosts,
     totals: { totalPnL, totalCostBasis, totalValue },
@@ -682,8 +689,6 @@ export async function getAggregateTradePnL(
     hasUnpriced,
     historyTruncated,
   };
-  resultCache.set(cacheKey, result);
-  return result;
 }
 
 export type { HeliusTx };

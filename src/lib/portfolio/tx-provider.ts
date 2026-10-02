@@ -240,13 +240,19 @@ function fetchAddressesBounded(
   );
 }
 
-export async function fetchTransactions(
+export function fetchTransactions(
   wallet: string,
   maxPages = DEFAULT_MAX_PAGES,
 ): Promise<TxFetchResult> {
-  const cached = txCache.get(wallet);
-  if (cached) return cached;
+  return txCache.getOrFetch(wallet, () =>
+    fetchTransactionsUncached(wallet, maxPages),
+  );
+}
 
+async function fetchTransactionsUncached(
+  wallet: string,
+  maxPages: number,
+): Promise<TxFetchResult> {
   const owner = await fetchForAddress(wallet, maxPages);
 
   const accountsEnumerable = Boolean(process.env.HELIUS_API_KEY);
@@ -270,7 +276,7 @@ export async function fetchTransactions(
     (a, b) => (b.timestamp || 0) - (a.timestamp || 0),
   );
 
-  const result: TxFetchResult = {
+  return {
     txs,
     truncated:
       owner.truncated ||
@@ -278,6 +284,4 @@ export async function fetchTransactions(
       !accountsEnumerable ||
       accountResults.some((r) => r.truncated),
   };
-  txCache.set(wallet, result);
-  return result;
 }

@@ -106,9 +106,11 @@ const tokenMetaSchema = z.looseObject({
     .nullish(),
 });
 
-async function getTokenList(wallet: string): Promise<TokenListItem[]> {
-  const cached = tokenListCache.get(wallet);
-  if (cached) return cached;
+function getTokenList(wallet: string): Promise<TokenListItem[]> {
+  return tokenListCache.getOrFetch(wallet, () => fetchTokenList(wallet));
+}
+
+async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
   const data = await fetchJSON(
     `https://public-api.birdeye.so/v1/wallet/token_list?wallet=${wallet}`,
     {
@@ -125,7 +127,6 @@ async function getTokenList(wallet: string): Promise<TokenListItem[]> {
     priceUsd: t.priceUsd ?? undefined,
     logoURI: t.logoURI ?? undefined,
   }));
-  tokenListCache.set(wallet, items);
   return items;
 }
 
