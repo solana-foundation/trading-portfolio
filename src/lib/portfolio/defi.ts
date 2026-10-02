@@ -1,7 +1,9 @@
+import { z } from "zod";
 import { getTokenMeta } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { mapLimit } from "@/lib/portfolio/concurrency";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
+import { jsonRpcSchema } from "@/lib/portfolio/tx-provider";
 import type { DefiPositionRow } from "@/lib/portfolio/types";
 
 const KLEND = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD";
@@ -107,13 +109,15 @@ function rpcUrl(): string {
   return `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
 }
 
-type RpcResp<T> = { result?: T; error?: { message?: string } };
-
 async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const resp = await fetchJSON<RpcResp<T>>(rpcUrl(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  const resp = await fetchJSON(rpcUrl(), {
+    vendor: "helius",
+    schema: jsonRpcSchema,
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    },
   });
   if (resp.error) {
     throw new Error(`rpc ${method}: ${resp.error.message || "failed"}`);
@@ -283,14 +287,20 @@ async function nftPositions(wallet: string): Promise<{
   };
 }
 
+const interactionsSchema = z.array(
+  z.looseObject({
+    instructions: z
+      .array(z.looseObject({ programId: z.string().nullish() }))
+      .nullish(),
+  }),
+);
+
 async function unknownInteractions(wallet: string): Promise<DefiPositionRow[]> {
   const apiKey = process.env.HELIUS_API_KEY;
-  const txs = await fetchJSON<
-    Array<{ instructions?: Array<{ programId?: string }> }>
-  >(
+  const txs = await fetchJSON(
     `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${apiKey}&limit=100`,
+    { vendor: "helius", schema: interactionsSchema },
   );
-  if (!Array.isArray(txs)) return [];
   const counts = new Map<string, number>();
   for (const tx of txs) {
     for (const ix of tx.instructions || []) {

@@ -1,6 +1,12 @@
+import { z } from "zod";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { mapLimit } from "@/lib/portfolio/concurrency";
-import { ProviderAuthError, type Vendor } from "@/lib/portfolio/errors";
+import {
+  describeError,
+  ProviderAuthError,
+  type Vendor,
+  VendorError,
+} from "@/lib/portfolio/errors";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 
@@ -21,7 +27,30 @@ export type TxFetchResult = {
 
 const txCache = new TtlCache<TxFetchResult>(1_000, 60 * 60 * 1000);
 
-type ErrorResp = { error?: { code?: number; message?: string } };
+const rpcErrorSchema = z.looseObject({
+  code: z.number().nullish(),
+  message: z.string().nullish(),
+});
+
+export function rpcResponse<T extends z.ZodType>(result: T) {
+  return z.looseObject({
+    result: result.nullish(),
+    error: rpcErrorSchema.nullish(),
+  });
+}
+
+export const jsonRpcSchema = rpcResponse(z.unknown());
+
+const heliusTxPageSchema = z.union([
+  z.array(z.looseObject({ signature: z.string().optional() })),
+  z.looseObject({ error: z.union([z.string(), rpcErrorSchema]) }),
+]);
+
+const tokenAccountsSchema = rpcResponse(
+  z.looseObject({
+    value: z.array(z.looseObject({ pubkey: z.string().nullish() })).nullish(),
+  }),
+);
 
 type TxProvider = {
   name: Vendor;
@@ -76,41 +105,36 @@ async function fetchFromProvider(
         message: `${provider.name} is not configured`,
       });
     }
-    let page: HeliusTx[] | ErrorResp;
-    try {
-      page = await fetchJSON(url);
-    } catch (e) {
-      const msg = (e as Error).message;
-      if (/HTTP (401|403)/.test(msg)) {
+    const page = await fetchJSON(url, {
+      vendor: provider.name,
+      schema: heliusTxPageSchema,
+    });
+    if (!Array.isArray(page)) {
+      const path = new URL(url).pathname;
+      const err = page.error;
+      const code =
+        typeof err === "string" ? undefined : (err.code ?? undefined);
+      const msg =
+        typeof err === "string" ? err : err.message || JSON.stringify(err);
+      if (isAuthError(code, msg)) {
         throw new ProviderAuthError({
           vendor: provider.name,
-          path: new URL(url).pathname,
+          path,
           message: `${provider.name}: ${msg}`,
         });
       }
-      throw new Error(
-        `${provider.name} fetch failed for ${wallet.slice(0, 4)}…: ${msg}`,
-      );
+      throw new VendorError({
+        vendor: provider.name,
+        kind: "api",
+        path,
+        message: `${provider.name} API error for ${wallet.slice(0, 4)}…: ${msg}`,
+      });
     }
-    if (page && !Array.isArray(page) && (page as ErrorResp).error) {
-      const errResp = page as ErrorResp;
-      const msg = errResp.error?.message || JSON.stringify(errResp.error);
-      if (isAuthError(errResp.error?.code, msg)) {
-        throw new ProviderAuthError({
-          vendor: provider.name,
-          path: new URL(url).pathname,
-          message: `${provider.name}: ${msg}`,
-        });
-      }
-      throw new Error(
-        `${provider.name} API error for ${wallet.slice(0, 4)}…: ${msg}`,
-      );
-    }
-    if (!Array.isArray(page) || page.length === 0) {
+    if (page.length === 0) {
       truncated = false;
       break;
     }
-    all.push(...page);
+    all.push(...(page as HeliusTx[]));
     if (page.length < PAGE_SIZE) {
       truncated = false;
       break;
@@ -145,7 +169,7 @@ async function fetchForAddress(
       return await fetchFromProvider(provider, address, maxPages);
     } catch (e) {
       if (!(e instanceof ProviderAuthError)) allAuthFailures = false;
-      failures.push((e as Error).message);
+      failures.push(describeError(e));
     }
   }
   const summary = failures.join("; ");
@@ -156,13 +180,13 @@ async function fetchForAddress(
       message: summary,
     });
   }
-  throw new Error(`All transaction providers failed: ${summary}`);
+  throw new VendorError({
+    vendor: configured[0].name,
+    kind: "api",
+    path: "/v0/addresses",
+    message: `All transaction providers failed: ${summary}`,
+  });
 }
-
-type RpcTokenAccountsResp = {
-  result?: { value?: Array<{ pubkey?: string }> };
-  error?: { code?: number; message?: string };
-};
 
 async function getTokenAccounts(wallet: string): Promise<string[]> {
   const apiKey = process.env.HELIUS_API_KEY;
@@ -170,28 +194,35 @@ async function getTokenAccounts(wallet: string): Promise<string[]> {
   const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
   const out: string[] = [];
   for (const programId of TOKEN_PROGRAM_IDS) {
-    const resp = await fetchJSON<RpcTokenAccountsResp>(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getTokenAccountsByOwner",
-        params: [wallet, { programId }, { encoding: "jsonParsed" }],
-      }),
+    const resp = await fetchJSON(url, {
+      vendor: "helius",
+      schema: tokenAccountsSchema,
+      init: {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTokenAccountsByOwner",
+          params: [wallet, { programId }, { encoding: "jsonParsed" }],
+        }),
+      },
     });
     if (resp.error) {
       const msg = resp.error.message || JSON.stringify(resp.error);
-      if (isAuthError(resp.error.code, msg)) {
+      if (isAuthError(resp.error.code ?? undefined, msg)) {
         throw new ProviderAuthError({
           vendor: "helius",
           path: "getTokenAccountsByOwner",
           message: `helius rpc: ${msg}`,
         });
       }
-      throw new Error(
-        `helius rpc getTokenAccountsByOwner failed for ${wallet.slice(0, 4)}…: ${msg}`,
-      );
+      throw new VendorError({
+        vendor: "helius",
+        kind: "api",
+        path: "getTokenAccountsByOwner",
+        message: `helius rpc getTokenAccountsByOwner failed for ${wallet.slice(0, 4)}…: ${msg}`,
+      });
     }
     for (const v of resp.result?.value || []) {
       if (v.pubkey) out.push(v.pubkey);
