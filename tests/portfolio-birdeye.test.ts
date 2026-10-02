@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getHistoricalPrice,
   getHistoricalPrices,
+  getHoldings,
   getNetWorthHistory,
   getPriceSeries,
   getTokenMeta,
@@ -214,7 +215,46 @@ describe("getPriceSeries", () => {
   });
 });
 
+describe("getHoldings", () => {
+  it("fails loud on an HTTP 200 body without the items collection", async () => {
+    for (const body of [{}, { data: {} }, { data: { items: null } }]) {
+      fetchMock.mockResolvedValueOnce(json(body));
+      const err = await getHoldings(mint()).catch((e) => e);
+      expect(err).toBeInstanceOf(VendorError);
+      expect(err.kind).toBe("shape");
+    }
+  });
+
+  it("treats success:false as a vendor refusal", async () => {
+    fetchMock.mockResolvedValueOnce(
+      json({ success: false, message: "wallet not found" }),
+    );
+    const err = await getHoldings(mint()).catch((e) => e);
+    expect(err).toBeInstanceOf(VendorError);
+    expect(err.kind).toBe("api");
+    expect(err.message).toContain("wallet not found");
+  });
+
+  it("returns an empty, priced holdings set for an empty items list", async () => {
+    fetchMock.mockResolvedValueOnce(
+      json({ success: true, data: { items: [] } }),
+    );
+    const h = await getHoldings(mint());
+    expect(h.tokens).toEqual([]);
+    expect(h.totalValue).toBe(0);
+  });
+});
+
 describe("getNetWorthHistory", () => {
+  it("fails loud on an HTTP 200 body without the history collection", async () => {
+    for (const body of [{}, { data: {} }, { data: { history: null } }]) {
+      fetchMock.mockResolvedValueOnce(json(body));
+      const err = await getNetWorthHistory(mint()).catch((e) => e);
+      expect(err).toBeInstanceOf(VendorError);
+      expect(err.kind).toBe("shape");
+    }
+  });
+
   it("propagates vendor failures", async () => {
     fetchMock.mockResolvedValue(json({}, 503));
     const err = await settle(getNetWorthHistory(mint()).catch((e) => e));

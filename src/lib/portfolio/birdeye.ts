@@ -83,20 +83,20 @@ function birdeyeFetch<S extends z.ZodType>(
 }
 
 const tokenListSchema = z.looseObject({
+  success: z.boolean().nullish(),
+  message: z.string().nullish(),
   data: z
     .looseObject({
-      items: z
-        .array(
-          z.looseObject({
-            address: z.string(),
-            symbol: z.string().nullish(),
-            name: z.string().nullish(),
-            uiAmount: z.number().nullish(),
-            priceUsd: z.number().nullish(),
-            logoURI: z.string().nullish(),
-          }),
-        )
-        .nullish(),
+      items: z.array(
+        z.looseObject({
+          address: z.string(),
+          symbol: z.string().nullish(),
+          name: z.string().nullish(),
+          uiAmount: z.number().nullish(),
+          priceUsd: z.number().nullish(),
+          logoURI: z.string().nullish(),
+        }),
+      ),
     })
     .nullish(),
 });
@@ -124,19 +124,41 @@ const priceSeriesSchema = z.looseObject({
 });
 
 const netWorthSchema = z.looseObject({
+  success: z.boolean().nullish(),
+  message: z.string().nullish(),
   data: z
     .looseObject({
-      history: z
-        .array(
-          z.looseObject({
-            timestamp: z.string().nullish(),
-            net_worth: z.number().nullish(),
-          }),
-        )
-        .nullish(),
+      history: z.array(
+        z.looseObject({
+          timestamp: z.string().nullish(),
+          net_worth: z.number().nullish(),
+        }),
+      ),
     })
     .nullish(),
 });
+
+function missingCollection(path: string, field: string): VendorError {
+  return new VendorError({
+    vendor: "birdeye",
+    kind: "shape",
+    path,
+    message: `unexpected response shape for ${path} (data.${field} missing)`,
+  });
+}
+
+function refusal(
+  path: string,
+  what: string,
+  message: string | null | undefined,
+): VendorError {
+  return new VendorError({
+    vendor: "birdeye",
+    kind: "api",
+    path,
+    message: `Birdeye reported failure for ${what}${message ? `: ${message}` : ""}`,
+  });
+}
 
 const tokenMetaSchema = z.looseObject({
   success: z.boolean().nullish(),
@@ -153,8 +175,9 @@ function getTokenList(wallet: string): Promise<TokenListItem[]> {
 }
 
 async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
+  const path = "/v1/wallet/token_list";
   const data = await birdeyeFetch(
-    `https://public-api.birdeye.so/v1/wallet/token_list?wallet=${wallet}`,
+    `https://public-api.birdeye.so${path}?wallet=${wallet}`,
     tokenListSchema,
     {
       attemptTimeoutMs: TOKEN_LIST_ATTEMPT_TIMEOUT_MS,
@@ -162,7 +185,11 @@ async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
       gate: tokenListGate,
     },
   );
-  return (data.data?.items || []).map((t) => ({
+  if (data.success === false) {
+    throw refusal(path, `token list of ${wallet.slice(0, 4)}…`, data.message);
+  }
+  if (!data.data) throw missingCollection(path, "items");
+  return data.data.items.map((t) => ({
     address: t.address,
     symbol: t.symbol ?? undefined,
     name: t.name ?? undefined,
@@ -329,12 +356,17 @@ export async function getNetWorthHistory(
   wallet: string,
 ): Promise<Map<number, number>> {
   const out = new Map<number, number>();
+  const path = "/wallet/v2/net-worth";
   const data = await birdeyeFetch(
-    `https://public-api.birdeye.so/wallet/v2/net-worth?wallet=${wallet}&count=${NET_WORTH_MAX_DAYS}&direction=back&type=1d`,
+    `https://public-api.birdeye.so${path}?wallet=${wallet}&count=${NET_WORTH_MAX_DAYS}&direction=back&type=1d`,
     netWorthSchema,
   );
+  if (data.success === false) {
+    throw refusal(path, `net worth of ${wallet.slice(0, 4)}…`, data.message);
+  }
+  if (!data.data) throw missingCollection(path, "history");
   const today = floorDayTs(Math.floor(Date.now() / 1000));
-  for (const row of data.data?.history || []) {
+  for (const row of data.data.history) {
     if (!row.timestamp || typeof row.net_worth !== "number") continue;
     const ts = Math.floor(Date.parse(row.timestamp) / 1000);
     if (!Number.isFinite(ts)) continue;
