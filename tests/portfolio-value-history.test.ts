@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireLockedClient,
+  seriesOrSkip,
   withTransaction,
 } from "@/lib/portfolio/value-history";
 
@@ -115,11 +116,66 @@ describe("acquireLockedClient", () => {
     for (const c of clients) expect(c.release).toHaveBeenCalledTimes(1);
   });
 
+  it("does not try the lock when the pool checkout outlasted the deadline", async () => {
+    vi.setSystemTime(1_000_000);
+    const client = { query: vi.fn(), release: vi.fn() };
+    const pool = {
+      connect: vi.fn(async () => {
+        vi.setSystemTime(1_010_000);
+        return client;
+      }),
+    };
+    await expect(
+      acquireLockedClient(pool as never, "wallet", 1_005_000),
+    ).rejects.toThrow("waiting for the sync lock");
+    expect(client.query).not.toHaveBeenCalled();
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release).toHaveBeenCalledWith();
+  });
+
+  it("releases a lock won after the deadline instead of starting the sync", async () => {
+    vi.setSystemTime(1_000_000);
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (String(sql).includes("pg_try_advisory_lock")) {
+          vi.setSystemTime(1_010_000);
+          return { rows: [{ locked: true }] };
+        }
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+    await expect(
+      acquireLockedClient(pool as never, "wallet", 1_005_000),
+    ).rejects.toThrow("waiting for the sync lock");
+    const sqls = client.query.mock.calls.map((c) => String(c[0]));
+    expect(sqls.some((q) => q.includes("pg_advisory_unlock"))).toBe(true);
+    expect(client.release).toHaveBeenCalledWith(false);
+  });
+
   it("destroys the connection and rethrows when the lock query fails", async () => {
     const { pool, clients } = fakePool([true], true);
     await expect(
       acquireLockedClient(pool as never, "wallet", Date.now() + 10_000),
     ).rejects.toThrow("db down");
     expect(clients[0].release).toHaveBeenCalledWith(true);
+  });
+});
+
+describe("seriesOrSkip", () => {
+  it("fetches before the deadline and skips after it", async () => {
+    const fetchSeries = vi.fn(async () => new Map([[86_400, 2]]));
+    const before = await seriesOrSkip(
+      "m",
+      0,
+      1,
+      Date.now() + 10_000,
+      fetchSeries,
+    );
+    expect(before?.get(86_400)).toBe(2);
+    expect(fetchSeries).toHaveBeenCalledTimes(1);
+    expect(seriesOrSkip("m", 0, 1, Date.now() - 1, fetchSeries)).toBeNull();
+    expect(fetchSeries).toHaveBeenCalledTimes(1);
   });
 });

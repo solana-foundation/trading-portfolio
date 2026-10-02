@@ -52,8 +52,16 @@ export async function acquireLockedClient(
   wallet: string,
   deadline: number,
 ): Promise<PoolClient> {
+  const gaveUp = () =>
+    new Error(
+      `gave up waiting for the sync lock on ${wallet.slice(0, 4)}… before the request deadline`,
+    );
   for (;;) {
     const client = await pool.connect();
+    if (Date.now() >= deadline) {
+      client.release();
+      throw gaveUp();
+    }
     let locked = false;
     try {
       const r = await client.query(
@@ -65,13 +73,19 @@ export async function acquireLockedClient(
       client.release(true);
       throw e;
     }
-    if (locked) return client;
-    client.release();
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `gave up waiting for the sync lock on ${wallet.slice(0, 4)}… before the request deadline`,
-      );
+    if (locked) {
+      if (Date.now() < deadline) return client;
+      let lockStateUnknown = false;
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
+        .catch(() => {
+          lockStateUnknown = true;
+        });
+      client.release(lockStateUnknown);
+      throw gaveUp();
     }
+    client.release();
+    if (Date.now() >= deadline) throw gaveUp();
     await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
   }
 }
@@ -91,12 +105,24 @@ export async function withTransaction<T>(
   }
 }
 
+export function seriesOrSkip(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+  deadline: number,
+  fetchSeries: typeof getPriceSeries = getPriceSeries,
+): Promise<Map<number, number>> | null {
+  if (Date.now() >= deadline) return null;
+  return fetchSeries(mint, fromTs, toTs);
+}
+
 async function pricesFor(
   client: PoolClient,
   mints: string[],
   fromDay: number,
   toDay: number,
-): Promise<Map<string, Map<number, number>>> {
+  deadline: number,
+): Promise<{ prices: Map<string, Map<number, number>>; cutShort: boolean }> {
   const result = new Map<string, Map<number, number>>();
   const lookup: string[] = [];
   for (const mint of mints) {
@@ -132,9 +158,18 @@ async function pricesFor(
   }
 
   const INSERT_CHUNK = 5000;
-  const series = await mapLimit(needFetch, PRICE_FETCH_CONCURRENCY, (mint) =>
-    getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1),
-  );
+  let cutShort = false;
+  const series = await mapLimit(needFetch, PRICE_FETCH_CONCURRENCY, (mint) => {
+    const pending = seriesOrSkip(
+      mint,
+      fromDay,
+      toDay + DAY_SECONDS - 1,
+      deadline,
+    );
+    if (pending) return pending;
+    cutShort = true;
+    return Promise.resolve(new Map<number, number>());
+  });
   const newRows: Array<[string, number, number]> = [];
   needFetch.forEach((mint, i) => {
     const known = result.get(mint);
@@ -161,7 +196,7 @@ async function pricesFor(
       params,
     );
   }
-  return result;
+  return { prices: result, cutShort };
 }
 
 async function cleanupStale(): Promise<void> {
@@ -190,6 +225,7 @@ async function syncWalletLocked(
   client: PoolClient,
   wallet: string,
   todayDay: number,
+  deadline: number,
 ): Promise<SyncOutcome> {
   const sync = await client.query(
     `INSERT INTO wallet_sync (wallet) VALUES ($1)
@@ -258,12 +294,14 @@ async function syncWalletLocked(
 
       const fromDay = days[0].day;
       const toDay = days[days.length - 1].day;
-      const prices = await pricesFor(
+      const { prices, cutShort } = await pricesFor(
         client,
         Array.from(priced),
         fromDay,
         toDay,
+        deadline,
       );
+      if (cutShort) partial = true;
 
       for (const d of days) {
         let value = 0;
@@ -393,7 +431,7 @@ async function syncWalletExclusive(
   );
   let lockStateUnknown = false;
   try {
-    return await syncWalletLocked(client, wallet, todayDay);
+    return await syncWalletLocked(client, wallet, todayDay, deadline);
   } finally {
     await client
       .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
@@ -433,6 +471,11 @@ export async function getValueHistory(
   let hasUnpricedDays = false;
   let todayValueUsd = 0;
   for (const wallet of wallets) {
+    if (Date.now() + SYNC_RESERVE_MS >= deadline) {
+      throw new Error(
+        `request deadline reached before syncing ${wallet.slice(0, 4)}…`,
+      );
+    }
     const r = await syncWallet(wallet, todayDay, deadline);
     metas[wallet] = r.meta;
     partial = partial || r.partial || r.meta.truncated;
