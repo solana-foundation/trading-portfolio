@@ -55,7 +55,7 @@ export type WalletSwapEvents = {
 
 export type SolPriceAt = (ts: number) => number;
 
-const MAX_DECIMALS = 18;
+const MAX_DECIMALS = 255;
 
 export function txType(tx: HeliusTx | undefined): string | undefined {
   return typeof tx?.type === "string" ? tx.type.toUpperCase() : undefined;

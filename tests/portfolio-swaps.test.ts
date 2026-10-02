@@ -410,11 +410,46 @@ describe("unrelated malformed transfers", () => {
   });
 });
 
+describe("high but valid decimals", () => {
+  it("prices a swap whose token uses more than 18 decimals", async () => {
+    const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    const MINT = "MintHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH";
+    const tx = {
+      type: "SWAP",
+      timestamp: 1_700_000_000,
+      signature: "hidec",
+      events: {
+        swap: {
+          nativeInput: { account: WALLET, amount: "1000000000" },
+          tokenOutputs: [
+            {
+              userAccount: WALLET,
+              mint: MINT,
+              rawTokenAmount: {
+                tokenAmount: `5${"0".repeat(24)}`,
+                decimals: 24,
+              },
+            },
+          ],
+        },
+      },
+    };
+    const { buys, unpricedSwaps } = aggregateSwapEvents(
+      WALLET,
+      [tx as never],
+      () => 100,
+    );
+    expect(unpricedSwaps).toBe(0);
+    expect(buys.get(MINT)?.amountBought).toBeCloseTo(5, 9);
+  });
+});
+
 describe("invalid decimals", () => {
   it("treats negative, fractional, or absurd decimals as malformed instead of scaling by them", async () => {
     const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
     const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
-    for (const decimals of [-50, 1.5, 400]) {
+    for (const decimals of [-50, 1.5, 256]) {
       const tx = {
         type: "SWAP",
         timestamp: 1_700_000_000,
