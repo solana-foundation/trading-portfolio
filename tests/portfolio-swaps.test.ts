@@ -251,9 +251,11 @@ describe("parseAmount", () => {
     expect(parseAmount(12.5)).toBe(12.5);
     expect(parseAmount("12.5")).toBe(12.5);
     expect(parseAmount(" 7 ")).toBe(7);
-    expect(parseAmount(undefined)).toBe(0);
-    expect(parseAmount(null)).toBe(0);
-    expect(parseAmount("")).toBe(0);
+    expect(parseAmount(undefined)).toBeNull();
+    expect(parseAmount(null)).toBeNull();
+    expect(parseAmount("")).toBeNull();
+    expect(parseAmount(0)).toBe(0);
+    expect(parseAmount("0")).toBe(0);
     expect(parseAmount("10garbage")).toBeNull();
     expect(parseAmount("1.25oops")).toBeNull();
     expect(parseAmount("Infinity")).toBeNull();
@@ -342,5 +344,35 @@ describe("transaction type case", () => {
     expect(
       buys.get("MintCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")?.amountBought,
     ).toBe(5);
+  });
+});
+
+describe("omitted amounts", () => {
+  it("treats a wallet-directed swap leg with no amount as unpriced, not zero", async () => {
+    const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    const tx = {
+      type: "SWAP",
+      timestamp: 1_700_000_000,
+      signature: "noamt",
+      events: {
+        swap: {
+          nativeInput: { account: WALLET, amount: "1000000000" },
+          tokenOutputs: [
+            {
+              userAccount: WALLET,
+              mint: "MintEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+            },
+          ],
+        },
+      },
+    };
+    const { buys, unpricedSwaps } = aggregateSwapEvents(
+      WALLET,
+      [tx],
+      () => 100,
+    );
+    expect(unpricedSwaps).toBe(1);
+    expect(buys.size).toBe(0);
   });
 });

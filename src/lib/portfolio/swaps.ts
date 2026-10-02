@@ -60,7 +60,7 @@ export function txType(tx: HeliusTx | undefined): string | undefined {
 }
 
 export function parseAmount(raw: unknown): number | null {
-  if (raw === null || raw === undefined || raw === "") return 0;
+  if (raw === null || raw === undefined || raw === "") return null;
   const n =
     typeof raw === "number"
       ? raw
@@ -71,7 +71,7 @@ export function parseAmount(raw: unknown): number | null {
 }
 
 function rawToFloat(rawTokenAmount: RawTokenAmount | undefined): number | null {
-  if (!rawTokenAmount) return 0;
+  if (!rawTokenAmount) return null;
   const raw = parseAmount(rawTokenAmount.tokenAmount);
   const decimals = parseAmount(rawTokenAmount.decimals);
   if (raw === null || decimals === null) return null;
