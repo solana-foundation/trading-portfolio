@@ -109,16 +109,15 @@ const historicalPriceSchema = z.looseObject({
 
 const priceSeriesSchema = z.looseObject({
   success: z.boolean().nullish(),
+  message: z.string().nullish(),
   data: z
     .looseObject({
-      items: z
-        .array(
-          z.looseObject({
-            unixTime: z.number().nullish(),
-            value: z.number().nullish(),
-          }),
-        )
-        .nullish(),
+      items: z.array(
+        z.looseObject({
+          unixTime: z.number().nullish(),
+          value: z.number().nullish(),
+        }),
+      ),
     })
     .nullish(),
 });
@@ -284,7 +283,7 @@ async function fetchHistoricalPrice(
   return typeof data.data?.value === "number" ? data.data.value : null;
 }
 
-function isVendorRefusal(e: unknown): e is VendorError {
+export function isBirdeyeRefusal(e: unknown): e is VendorError {
   return e instanceof VendorError && e.vendor === "birdeye" && e.kind === "api";
 }
 
@@ -301,7 +300,7 @@ export async function getHistoricalPrice(
       negativeTtl,
     );
   } catch (e) {
-    if (!isVendorRefusal(e)) throw e;
+    if (!isBirdeyeRefusal(e)) throw e;
     console.warn(`portfolio: ${describeError(e)}`);
     return null;
   }
@@ -333,13 +332,18 @@ export async function getPriceSeries(
   toTs: number,
 ): Promise<Map<number, number>> {
   const out = new Map<number, number>();
+  const path = "/defi/history_price";
   for (let from = fromTs; from <= toTs; from += SERIES_CHUNK_DAYS * 86_400) {
     const to = Math.min(from + SERIES_CHUNK_DAYS * 86_400 - 1, toTs);
     const data = await birdeyeFetch(
-      `https://public-api.birdeye.so/defi/history_price?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
+      `https://public-api.birdeye.so${path}?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
       priceSeriesSchema,
     );
-    for (const item of data.data?.items || []) {
+    if (data.success !== true) {
+      throw refusal(path, `price series of ${mint.slice(0, 4)}…`, data.message);
+    }
+    if (!data.data) throw missingCollection(path, "items");
+    for (const item of data.data.items) {
       if (
         typeof item.unixTime === "number" &&
         typeof item.value === "number" &&

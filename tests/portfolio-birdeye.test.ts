@@ -192,6 +192,19 @@ describe("getPriceSeries", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("treats success:false as a refusal and a missing collection as a shape failure", async () => {
+    fetchMock.mockResolvedValueOnce(json({ success: false, message: "nope" }));
+    const refused = await getPriceSeries(mint(), 0, DAY).catch((e) => e);
+    expect(refused).toBeInstanceOf(VendorError);
+    expect(refused.kind).toBe("api");
+    for (const body of [{ success: true }, { success: true, data: {} }]) {
+      fetchMock.mockResolvedValueOnce(json(body));
+      const err = await getPriceSeries(mint(), 0, DAY).catch((e) => e);
+      expect(err).toBeInstanceOf(VendorError);
+      expect(err.kind).toBe("shape");
+    }
+  });
+
   it("merges chunks keyed by floored day", async () => {
     const m = mint();
     fetchMock
