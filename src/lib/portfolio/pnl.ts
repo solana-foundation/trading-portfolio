@@ -117,11 +117,11 @@ async function solPricesByDay(
   return out;
 }
 
-export function getAggregateTradePnL(
+export function aggregateCacheKey(
   wallets: string[],
   holdings: Holdings[],
   netWorthUsd?: number,
-): Promise<TradePnLResult> {
+): string {
   const holdingsFp = createHash("sha1")
     .update(
       JSON.stringify(
@@ -131,9 +131,17 @@ export function getAggregateTradePnL(
       ),
     )
     .digest("hex");
-  const cacheKey = `${[...wallets].sort().join(",")}:${holdingsFp}`;
-  return resultCache.getOrFetch(cacheKey, () =>
-    computeAggregateTradePnL(wallets, holdings, netWorthUsd),
+  return `${[...wallets].sort().join(",")}:${holdingsFp}:${netWorthUsd ?? ""}`;
+}
+
+export function getAggregateTradePnL(
+  wallets: string[],
+  holdings: Holdings[],
+  netWorthUsd?: number,
+): Promise<TradePnLResult> {
+  return resultCache.getOrFetch(
+    aggregateCacheKey(wallets, holdings, netWorthUsd),
+    () => computeAggregateTradePnL(wallets, holdings, netWorthUsd),
   );
 }
 
