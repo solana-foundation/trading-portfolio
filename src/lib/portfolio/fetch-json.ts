@@ -7,8 +7,8 @@ import {
 } from "@/lib/portfolio/errors";
 
 const DEFAULT_ATTEMPTS = 3;
-const DEFAULT_BUDGET_MS = 20_000;
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 10_000;
+const DEFAULT_BUDGET_MS = 40_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 15_000;
 const BACKOFF_BASE_MS = 300;
 const BACKOFF_CAP_MS = 4_000;
 const RETRYABLE_STATUSES = new Set([408, 425, 429]);
@@ -76,10 +76,7 @@ async function runAttempt<S extends z.ZodType>(
   const { vendor } = opts;
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (opts.signal) signals.push(opts.signal);
-  let res: Response;
-  try {
-    res = await fetch(url, { ...opts.init, signal: AbortSignal.any(signals) });
-  } catch (cause) {
+  const interrupted = (cause: unknown, stage: string): Attempt<never> => {
     if (opts.signal?.aborted) {
       return {
         ok: false,
@@ -87,7 +84,7 @@ async function runAttempt<S extends z.ZodType>(
           vendor,
           kind: "network",
           path,
-          message: `request aborted for ${path}`,
+          message: `request aborted ${stage} for ${path}`,
           cause,
         }),
       };
@@ -100,12 +97,18 @@ async function runAttempt<S extends z.ZodType>(
         kind: timedOut ? "timeout" : "network",
         path,
         message: timedOut
-          ? `timeout after ${timeoutMs}ms for ${path}`
-          : `network error for ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          ? `timeout after ${timeoutMs}ms ${stage} for ${path}`
+          : `network error ${stage} for ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
         retryable: true,
         cause,
       }),
     };
+  };
+  let res: Response;
+  try {
+    res = await fetch(url, { ...opts.init, signal: AbortSignal.any(signals) });
+  } catch (cause) {
+    return interrupted(cause, "connecting");
   }
   if (!res.ok) {
     const message = `HTTP ${res.status} for ${path}`;
@@ -137,6 +140,9 @@ async function runAttempt<S extends z.ZodType>(
   try {
     body = await res.json();
   } catch (cause) {
+    if (cause instanceof Error && cause.name !== "SyntaxError") {
+      return interrupted(cause, "reading body");
+    }
     return {
       ok: false,
       error: new VendorError({

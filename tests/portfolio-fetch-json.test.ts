@@ -170,6 +170,26 @@ describe("fetchJSON", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("treats a body read cut off by the attempt timeout as a timeout, then retries", async () => {
+    const cutOff = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: () => Promise.reject(new DOMException("aborted", "TimeoutError")),
+    } as unknown as Response;
+    fetchMock
+      .mockResolvedValueOnce(cutOff)
+      .mockResolvedValueOnce(cutOff)
+      .mockResolvedValueOnce(cutOff);
+    const err = await settle(
+      fetchJSON(URL_, { vendor: "birdeye", schema }).catch((e) => e),
+    );
+    expect(err).toBeInstanceOf(VendorError);
+    expect(err.kind).toBe("timeout");
+    expect(err.message).toContain("reading body");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("retries network errors", async () => {
     fetchMock
       .mockRejectedValueOnce(new TypeError("fetch failed"))

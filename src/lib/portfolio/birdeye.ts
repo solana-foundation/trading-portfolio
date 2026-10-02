@@ -25,6 +25,8 @@ const CANONICAL_MINTS: Record<string, string> = {
 
 const DUST_THRESHOLD_USD = 0.01;
 const BIRDEYE_CONCURRENCY = 8;
+const TOKEN_LIST_ATTEMPT_TIMEOUT_MS = 25_000;
+const TOKEN_LIST_BUDGET_MS = 50_000;
 const NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -64,12 +66,14 @@ function birdeyeHeaders(): Record<string, string> {
 function birdeyeFetch<S extends z.ZodType>(
   url: string,
   schema: S,
+  limits: { attemptTimeoutMs?: number; budgetMs?: number } = {},
 ): Promise<z.output<S>> {
   return fetchJSON(url, {
     vendor: "birdeye",
     schema,
     init: { headers: birdeyeHeaders() },
     gate: birdeyeGate,
+    ...limits,
   });
 }
 
@@ -147,6 +151,10 @@ async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
   const data = await birdeyeFetch(
     `https://public-api.birdeye.so/v1/wallet/token_list?wallet=${wallet}`,
     tokenListSchema,
+    {
+      attemptTimeoutMs: TOKEN_LIST_ATTEMPT_TIMEOUT_MS,
+      budgetMs: TOKEN_LIST_BUDGET_MS,
+    },
   );
   return (data.data?.items || []).map((t) => ({
     address: t.address,
