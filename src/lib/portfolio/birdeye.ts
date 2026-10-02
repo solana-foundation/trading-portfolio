@@ -128,12 +128,14 @@ const netWorthSchema = z.looseObject({
   message: z.string().nullish(),
   data: z
     .looseObject({
-      history: z.array(
-        z.looseObject({
-          timestamp: z.string().nullish(),
-          net_worth: z.number().nullish(),
-        }),
-      ),
+      history: z
+        .array(
+          z.looseObject({
+            timestamp: z.string().nullish(),
+            net_worth: z.number().nullish(),
+          }),
+        )
+        .nullable(),
     })
     .nullish(),
 });
@@ -366,7 +368,7 @@ export async function getNetWorthHistory(
   }
   if (!data.data) throw missingCollection(path, "history");
   const today = floorDayTs(Math.floor(Date.now() / 1000));
-  for (const row of data.data.history) {
+  for (const row of data.data.history ?? []) {
     if (!row.timestamp || typeof row.net_worth !== "number") continue;
     const ts = Math.floor(Date.parse(row.timestamp) / 1000);
     if (!Number.isFinite(ts)) continue;

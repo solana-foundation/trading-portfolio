@@ -247,12 +247,20 @@ describe("getHoldings", () => {
 
 describe("getNetWorthHistory", () => {
   it("fails loud on an HTTP 200 body without the history collection", async () => {
-    for (const body of [{}, { data: {} }, { data: { history: null } }]) {
+    for (const body of [{}, { data: {} }, { data: { history: "x" } }]) {
       fetchMock.mockResolvedValueOnce(json(body));
       const err = await getNetWorthHistory(mint()).catch((e) => e);
       expect(err).toBeInstanceOf(VendorError);
       expect(err.kind).toBe("shape");
     }
+  });
+
+  it("treats a null history as a vendor-asserted empty history", async () => {
+    fetchMock.mockResolvedValueOnce(
+      json({ success: true, data: { history: null } }),
+    );
+    const out = await getNetWorthHistory(mint());
+    expect(out.size).toBe(0);
   });
 
   it("propagates vendor failures", async () => {
