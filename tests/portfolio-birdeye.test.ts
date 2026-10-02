@@ -268,12 +268,25 @@ describe("getTokenMeta", () => {
     );
   });
 
-  it("caches a vendor miss as null", async () => {
+  it("caches a vendor-asserted miss as null", async () => {
     const m = mint();
-    fetchMock.mockResolvedValueOnce(json({ success: false }));
+    fetchMock.mockResolvedValueOnce(json({ success: true, data: {} }));
     expect(await getTokenMeta(m)).toBeNull();
     expect(await getTokenMeta(m)).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache a refusal or a body without the success flag", async () => {
+    const m = mint();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock
+      .mockResolvedValueOnce(json({ success: false }))
+      .mockResolvedValueOnce(json({ data: { symbol: "X" } }))
+      .mockResolvedValueOnce(json({ success: true, data: { symbol: "X" } }));
+    expect(await getTokenMeta(m)).toBeNull();
+    expect(await getTokenMeta(m)).toBeNull();
+    expect(await getTokenMeta(m)).toEqual({ symbol: "X" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 

@@ -350,7 +350,15 @@ async function fetchTokenMeta(mint: string): Promise<TokenMeta | null> {
     `https://public-api.birdeye.so/defi/v3/token/meta-data/single?address=${mint}`,
     tokenMetaSchema,
   );
-  if (data.success && data.data?.symbol) {
+  if (data.success !== true) {
+    throw new VendorError({
+      vendor: "birdeye",
+      kind: "api",
+      path: "/defi/v3/token/meta-data/single",
+      message: `Birdeye ${data.success === false ? "reported failure" : "answered without a success flag"} for metadata of ${mint.slice(0, 4)}…`,
+    });
+  }
+  if (data.data?.symbol) {
     return {
       symbol: data.data.symbol,
       ...(data.data.logo_uri ? { icon: data.data.logo_uri } : {}),
