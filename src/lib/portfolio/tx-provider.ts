@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { TtlCache } from "@/lib/portfolio/cache";
-import { mapLimit } from "@/lib/portfolio/concurrency";
+import {
+  createLimiter,
+  type Limiter,
+  mapLimit,
+} from "@/lib/portfolio/concurrency";
 import {
   describeError,
   ProviderAuthError,
@@ -14,6 +18,28 @@ const PAGE_SIZE = 100;
 const DEFAULT_MAX_PAGES = 20;
 const MAX_TOKEN_ACCOUNTS = 128;
 const ACCOUNT_FETCH_CONCURRENCY = 8;
+const HELIUS_CONCURRENCY = 8;
+const TRITON_CONCURRENCY = 8;
+
+export const heliusGate = createLimiter(HELIUS_CONCURRENCY);
+const tritonGate = createLimiter(TRITON_CONCURRENCY);
+
+export function heliusApiKey(): string {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) {
+    throw new VendorError({
+      vendor: "helius",
+      kind: "config",
+      path: "env",
+      message: "HELIUS_API_KEY is not set",
+    });
+  }
+  return apiKey;
+}
+
+export function heliusRpcUrl(): string {
+  return `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey()}`;
+}
 
 const TOKEN_PROGRAM_IDS = [
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
@@ -54,12 +80,14 @@ const tokenAccountsSchema = rpcResponse(
 
 type TxProvider = {
   name: Vendor;
+  gate: Limiter;
   pageUrl: (wallet: string, before: string | null) => string | null;
 };
 
 const PROVIDERS: TxProvider[] = [
   {
     name: "helius",
+    gate: heliusGate,
     pageUrl: (wallet, before) => {
       const apiKey = process.env.HELIUS_API_KEY;
       if (!apiKey) return null;
@@ -72,6 +100,7 @@ const PROVIDERS: TxProvider[] = [
   },
   {
     name: "triton",
+    gate: tritonGate,
     pageUrl: (wallet, before) => {
       const base = process.env.TRITON_API_URL;
       if (!base) return null;
@@ -108,6 +137,7 @@ async function fetchFromProvider(
     const page = await fetchJSON(url, {
       vendor: provider.name,
       schema: heliusTxPageSchema,
+      gate: provider.gate,
     });
     if (!Array.isArray(page)) {
       const path = new URL(url).pathname;
@@ -162,22 +192,23 @@ async function fetchForAddress(
     });
   }
 
-  const failures: string[] = [];
-  let allAuthFailures = true;
+  const failures: unknown[] = [];
   for (const provider of configured) {
     try {
       return await fetchFromProvider(provider, address, maxPages);
     } catch (e) {
-      if (!(e instanceof ProviderAuthError)) allAuthFailures = false;
-      failures.push(describeError(e));
+      failures.push(e);
     }
   }
-  const summary = failures.join("; ");
-  if (allAuthFailures) {
+  if (failures.length === 1) throw failures[0];
+  const summary = failures.map(describeError).join("; ");
+  const first = failures[0];
+  if (failures.every((e) => e instanceof ProviderAuthError)) {
     throw new ProviderAuthError({
       vendor: configured[0].name,
       path: "/v0/addresses",
       message: summary,
+      status: first instanceof ProviderAuthError ? first.status : undefined,
     });
   }
   throw new VendorError({
@@ -189,14 +220,14 @@ async function fetchForAddress(
 }
 
 async function getTokenAccounts(wallet: string): Promise<string[]> {
-  const apiKey = process.env.HELIUS_API_KEY;
-  if (!apiKey) return [];
-  const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+  if (!process.env.HELIUS_API_KEY) return [];
+  const url = heliusRpcUrl();
   const out: string[] = [];
   for (const programId of TOKEN_PROGRAM_IDS) {
     const resp = await fetchJSON(url, {
       vendor: "helius",
       schema: tokenAccountsSchema,
+      gate: heliusGate,
       init: {
         method: "POST",
         headers: { "content-type": "application/json" },

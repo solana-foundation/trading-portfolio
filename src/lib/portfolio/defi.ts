@@ -3,7 +3,12 @@ import { getTokenMeta } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { mapLimit } from "@/lib/portfolio/concurrency";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
-import { jsonRpcSchema } from "@/lib/portfolio/tx-provider";
+import {
+  heliusApiKey,
+  heliusGate,
+  heliusRpcUrl,
+  jsonRpcSchema,
+} from "@/lib/portfolio/tx-provider";
 import type { DefiPositionRow } from "@/lib/portfolio/types";
 
 const KLEND = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD";
@@ -103,16 +108,11 @@ function b58encode(bytes: Uint8Array): string {
   return out;
 }
 
-function rpcUrl(): string {
-  const apiKey = process.env.HELIUS_API_KEY;
-  if (!apiKey) throw new Error("HELIUS_API_KEY is not set");
-  return `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
-}
-
 async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const resp = await fetchJSON(rpcUrl(), {
+  const resp = await fetchJSON(heliusRpcUrl(), {
     vendor: "helius",
     schema: jsonRpcSchema,
+    gate: heliusGate,
     init: {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -296,10 +296,9 @@ const interactionsSchema = z.array(
 );
 
 async function unknownInteractions(wallet: string): Promise<DefiPositionRow[]> {
-  const apiKey = process.env.HELIUS_API_KEY;
   const txs = await fetchJSON(
-    `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${apiKey}&limit=100`,
-    { vendor: "helius", schema: interactionsSchema },
+    `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${heliusApiKey()}&limit=100`,
+    { vendor: "helius", schema: interactionsSchema, gate: heliusGate },
   );
   const counts = new Map<string, number>();
   for (const tx of txs) {
