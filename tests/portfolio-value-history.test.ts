@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DeadlineError } from "@/lib/portfolio/deadline";
 import {
   acquireLockedClient,
   joinOrQueue,
@@ -112,7 +113,7 @@ describe("acquireLockedClient", () => {
     ).catch((e) => e);
     await vi.runAllTimersAsync();
     const err = await p;
-    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(DeadlineError);
     expect(err.message).toContain("waiting for the sync lock");
     for (const c of clients) expect(c.release).toHaveBeenCalledTimes(1);
   });
@@ -128,7 +129,7 @@ describe("acquireLockedClient", () => {
     };
     await expect(
       acquireLockedClient(pool as never, "wallet", 1_005_000),
-    ).rejects.toThrow("waiting for the sync lock");
+    ).rejects.toBeInstanceOf(DeadlineError);
     expect(client.query).not.toHaveBeenCalled();
     expect(client.release).toHaveBeenCalledTimes(1);
     expect(client.release).toHaveBeenCalledWith();
@@ -149,7 +150,7 @@ describe("acquireLockedClient", () => {
     const pool = { connect: vi.fn(async () => client) };
     await expect(
       acquireLockedClient(pool as never, "wallet", 1_005_000),
-    ).rejects.toThrow("waiting for the sync lock");
+    ).rejects.toBeInstanceOf(DeadlineError);
     const sqls = client.query.mock.calls.map((c) => String(c[0]));
     expect(sqls.some((q) => q.includes("pg_advisory_unlock"))).toBe(true);
     expect(client.release).toHaveBeenCalledWith(false);

@@ -13,6 +13,7 @@ import {
   reconstructDailyBalances,
 } from "@/lib/portfolio/daily-balances";
 import { getPool } from "@/lib/portfolio/db";
+import { DeadlineError } from "@/lib/portfolio/deadline";
 import { describeError } from "@/lib/portfolio/errors";
 import { SOL_MINT, STABLECOIN_MINTS } from "@/lib/portfolio/swaps";
 import { fetchTransactions } from "@/lib/portfolio/tx-provider";
@@ -54,8 +55,9 @@ export async function acquireLockedClient(
   deadline: number,
 ): Promise<PoolClient> {
   const gaveUp = () =>
-    new Error(
-      `gave up waiting for the sync lock on ${wallet.slice(0, 4)}… before the request deadline`,
+    new DeadlineError(
+      `waiting for the sync lock on ${wallet.slice(0, 4)}…`,
+      REQUEST_DEADLINE_MS,
     );
   for (;;) {
     const client = await pool.connect();
@@ -502,8 +504,9 @@ export async function getValueHistory(
   let todayValueUsd = 0;
   for (const wallet of wallets) {
     if (Date.now() + SYNC_RESERVE_MS >= deadline) {
-      throw new Error(
-        `request deadline reached before syncing ${wallet.slice(0, 4)}…`,
+      throw new DeadlineError(
+        `value-history before syncing ${wallet.slice(0, 4)}…`,
+        REQUEST_DEADLINE_MS,
       );
     }
     const r = await syncWallet(wallet, todayDay, deadline);
@@ -514,8 +517,9 @@ export async function getValueHistory(
   }
 
   if (Date.now() >= deadline) {
-    throw new Error(
-      "request deadline reached before reading the stored series",
+    throw new DeadlineError(
+      "value-history before reading the stored series",
+      REQUEST_DEADLINE_MS,
     );
   }
   const summed = await pool.query(

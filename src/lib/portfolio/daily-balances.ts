@@ -67,7 +67,7 @@ export function reconstructDailyBalances(
     .filter((t) => (t.timestamp || 0) > 0)
     .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   if (sorted.length === 0) return [];
-  const moves = sorted.map((t) => walletMoves(t, wallet));
+  for (const t of sorted) walletMoves(t, wallet);
 
   const genesisDay = floorDay(sorted[sorted.length - 1].timestamp || 0);
   const balances = new Map(currentBalances);
@@ -83,7 +83,7 @@ export function reconstructDailyBalances(
       i < sorted.length &&
       (sorted[i].timestamp || 0) > day + DAY_SECONDS - 1
     ) {
-      undoTx(balances, moves[i]);
+      undoTx(balances, walletMoves(sorted[i], wallet));
       i++;
     }
     const snapshot = new Map<string, number>();
