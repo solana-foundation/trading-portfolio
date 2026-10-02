@@ -283,12 +283,34 @@ describe("getPriceSeries", () => {
 
 describe("getHoldings", () => {
   it("fails loud on an HTTP 200 body without the items collection", async () => {
-    for (const body of [{}, { data: {} }, { data: { items: null } }]) {
+    for (const body of [
+      { success: true },
+      { success: true, data: {} },
+      { success: true, data: { items: null } },
+    ]) {
       fetchMock.mockResolvedValueOnce(json(body));
       const err = await getHoldings(mint()).catch((e) => e);
       expect(err).toBeInstanceOf(VendorError);
       expect(err.kind).toBe("shape");
     }
+  });
+
+  it("does not accept or cache a token list without an explicit success flag", async () => {
+    const w = mint();
+    fetchMock
+      .mockResolvedValueOnce(json({ data: { items: [] } }))
+      .mockResolvedValueOnce(
+        json({
+          success: true,
+          data: { items: [{ address: "m", uiAmount: 2, priceUsd: 3 }] },
+        }),
+      );
+    const err = await getHoldings(w).catch((e) => e);
+    expect(err).toBeInstanceOf(VendorError);
+    expect(err.kind).toBe("api");
+    const h = await getHoldings(w);
+    expect(h.totalValue).toBe(6);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("treats success:false as a vendor refusal", async () => {
@@ -313,12 +335,20 @@ describe("getHoldings", () => {
 
 describe("getNetWorthHistory", () => {
   it("fails loud on an HTTP 200 body without the history collection", async () => {
-    for (const body of [{}, { data: {} }, { data: { history: "x" } }]) {
+    for (const body of [
+      { success: true },
+      { success: true, data: {} },
+      { success: true, data: { history: "x" } },
+    ]) {
       fetchMock.mockResolvedValueOnce(json(body));
       const err = await getNetWorthHistory(mint()).catch((e) => e);
       expect(err).toBeInstanceOf(VendorError);
       expect(err.kind).toBe("shape");
     }
+    fetchMock.mockResolvedValueOnce(json({ data: { history: [] } }));
+    const refused = await getNetWorthHistory(mint()).catch((e) => e);
+    expect(refused).toBeInstanceOf(VendorError);
+    expect(refused.kind).toBe("api");
   });
 
   it("treats a null history as a vendor-asserted empty history", async () => {
@@ -340,6 +370,7 @@ describe("getNetWorthHistory", () => {
     vi.setSystemTime(new Date("2026-01-10T12:00:00Z"));
     fetchMock.mockResolvedValueOnce(
       json({
+        success: true,
         data: {
           history: [
             { timestamp: "2026-01-09T00:00:00Z", net_worth: 10 },

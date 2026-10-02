@@ -157,7 +157,7 @@ function refusal(
     vendor: "birdeye",
     kind: "api",
     path,
-    message: `Birdeye reported failure for ${what}${message ? `: ${message}` : ""}`,
+    message: `Birdeye did not report success for ${what}${message ? `: ${message}` : ""}`,
   });
 }
 
@@ -186,7 +186,7 @@ async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
       gate: tokenListGate,
     },
   );
-  if (data.success === false) {
+  if (data.success !== true) {
     throw refusal(path, `token list of ${wallet.slice(0, 4)}…`, data.message);
   }
   if (!data.data) throw missingCollection(path, "items");
@@ -409,7 +409,7 @@ export async function getNetWorthHistory(
     `https://public-api.birdeye.so${path}?wallet=${wallet}&count=${NET_WORTH_MAX_DAYS}&direction=back&type=1d`,
     netWorthSchema,
   );
-  if (data.success === false) {
+  if (data.success !== true) {
     throw refusal(path, `net worth of ${wallet.slice(0, 4)}…`, data.message);
   }
   if (!data.data) throw missingCollection(path, "history");
