@@ -109,12 +109,15 @@ export function synthesizeSwapFromTransfers(
 
   let malformed = false;
   for (const tt of tx.tokenTransfers || []) {
+    const involved =
+      tt.fromUserAccount === wallet || tt.toUserAccount === wallet;
+    if (!involved || !tt.mint) continue;
     const amt = parseAmount(tt.tokenAmount);
     if (amt === null) {
       malformed = true;
       continue;
     }
-    if (amt <= 0 || !tt.mint) continue;
+    if (amt <= 0) continue;
     const fakeRaw: RawTokenAmount = { tokenAmount: String(amt), decimals: 0 };
     if (tt.fromUserAccount === wallet) {
       synth.tokenInputs?.push({
@@ -134,6 +137,9 @@ export function synthesizeSwapFromTransfers(
   let solOut = 0;
   let solIn = 0;
   for (const nt of tx.nativeTransfers || []) {
+    const involved =
+      nt.fromUserAccount === wallet || nt.toUserAccount === wallet;
+    if (!involved) continue;
     const lam = parseAmount(nt.amount);
     if (lam === null) {
       malformed = true;
@@ -141,7 +147,7 @@ export function synthesizeSwapFromTransfers(
     }
     if (lam <= 0) continue;
     if (nt.fromUserAccount === wallet) solOut += lam;
-    else if (nt.toUserAccount === wallet) solIn += lam;
+    else solIn += lam;
   }
   if (malformed) return { ...synth, malformed: true };
   if (solOut >= FEE_THRESHOLD_LAMPORTS) {

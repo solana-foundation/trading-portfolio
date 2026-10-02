@@ -202,6 +202,7 @@ async function computeAggregateTradePnL(
   let hasUnpriced =
     swapEventsPerWallet.some((x) => x.unpricedSwaps > 0) ||
     solPriceFellBack ||
+    currentSolPrice <= 0 ||
     holdings.some((h) => (h?.unpricedCount || 0) > 0);
 
   function bumpMint(
@@ -499,12 +500,14 @@ async function computeAggregateTradePnL(
       if (kind && kind !== "TRANSFER") continue;
       const ts = tx.timestamp || 0;
       for (const tt of tx.tokenTransfers || []) {
+        if (tt.toUserAccount !== w && tt.fromUserAccount !== w) continue;
+        if (!tt.mint) continue;
         const amt = parseAmount(tt.tokenAmount);
         if (amt === null) {
           hasUnpriced = true;
           continue;
         }
-        if (amt <= 0 || !tt.mint) continue;
+        if (amt <= 0) continue;
         if (
           tt.toUserAccount === w &&
           tt.fromUserAccount &&
@@ -520,6 +523,7 @@ async function computeAggregateTradePnL(
         }
       }
       for (const nt of tx.nativeTransfers || []) {
+        if (nt.toUserAccount !== w && nt.fromUserAccount !== w) continue;
         const lam = parseAmount(nt.amount);
         if (lam === null) {
           hasUnpriced = true;

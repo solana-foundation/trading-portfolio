@@ -376,3 +376,36 @@ describe("omitted amounts", () => {
     expect(buys.size).toBe(0);
   });
 });
+
+describe("unrelated malformed transfers", () => {
+  it("does not drop a valid synthesized swap because of someone else's malformed transfer", async () => {
+    const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    const MINT = "MintFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
+    const tx = {
+      type: "SWAP",
+      timestamp: 1_700_000_000,
+      signature: "mixed",
+      tokenTransfers: [
+        {
+          fromUserAccount: "someoneA",
+          toUserAccount: "someoneB",
+          mint: MINT,
+          tokenAmount: "10garbage",
+        },
+        { toUserAccount: WALLET, mint: MINT, tokenAmount: "5" },
+      ],
+      nativeTransfers: [
+        { fromUserAccount: "someoneA", toUserAccount: "someoneB", amount: "x" },
+        { fromUserAccount: WALLET, amount: "2000000000" },
+      ],
+    };
+    const { buys, unpricedSwaps } = aggregateSwapEvents(
+      WALLET,
+      [tx],
+      () => 100,
+    );
+    expect(unpricedSwaps).toBe(0);
+    expect(buys.get(MINT)?.amountBought).toBe(5);
+  });
+});
