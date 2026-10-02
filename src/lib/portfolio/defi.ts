@@ -119,11 +119,13 @@ async function rpc<S extends z.ZodType>(
   method: string,
   params: unknown[],
   result: S,
+  signal?: AbortSignal,
 ): Promise<z.output<S>> {
   const resp = await fetchJSON(heliusRpcUrl(), {
     vendor: "helius",
     schema: rpcResponse(result),
     gate: heliusGate,
+    signal,
     init: {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -192,7 +194,10 @@ const parsedTokenAccountsSchema = z.looseObject({
 
 const reserveMintCache = new TtlCache<string>(2_000, 24 * 60 * 60 * 1000);
 
-async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
+async function kaminoDeposits(
+  wallet: string,
+  signal: AbortSignal,
+): Promise<DefiPositionRow[]> {
   const obligations = await rpc(
     "getProgramAccounts",
     [
@@ -205,6 +210,7 @@ async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
       },
     ],
     programAccountsSchema,
+    signal,
   );
   const deposits: Array<{ reserve: string; valueUsd: number }> = [];
   for (const acc of obligations) {
@@ -230,6 +236,7 @@ async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
       "getMultipleAccounts",
       [batch, { encoding: "base64" }],
       multipleAccountsSchema,
+      signal,
     );
     batch.forEach((reserve, j) => {
       const info = infos.value[j];
@@ -265,6 +272,7 @@ async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
 
 async function ownerAccountPositions(
   wallet: string,
+  signal: AbortSignal,
 ): Promise<DefiPositionRow[]> {
   const rows: DefiPositionRow[] = [];
   for (const proto of OWNER_ACCOUNT_PROTOCOLS) {
@@ -279,6 +287,7 @@ async function ownerAccountPositions(
         },
       ],
       programAccountsSchema,
+      signal,
     );
     if (res.length > 0) {
       rows.push({
@@ -295,13 +304,17 @@ async function ownerAccountPositions(
   return rows;
 }
 
-async function nftPositions(wallet: string): Promise<DefiPositionRow[]> {
+async function nftPositions(
+  wallet: string,
+  signal: AbortSignal,
+): Promise<DefiPositionRow[]> {
   const nftMints: string[] = [];
   for (const programId of TOKEN_PROGRAMS) {
     const res = await rpc(
       "getTokenAccountsByOwner",
       [wallet, { programId }, { encoding: "jsonParsed" }],
       parsedTokenAccountsSchema,
+      signal,
     );
     for (const acc of res.value) {
       const info = acc.account.data.parsed.info;
@@ -326,6 +339,7 @@ async function nftPositions(wallet: string): Promise<DefiPositionRow[]> {
           },
         ],
         programAccountsSchema,
+        signal,
       ),
     );
     let count = 0;
@@ -382,10 +396,13 @@ const interactionsSchema = z.array(
   }),
 );
 
-async function unknownInteractions(wallet: string): Promise<DefiPositionRow[]> {
+async function unknownInteractions(
+  wallet: string,
+  signal: AbortSignal,
+): Promise<DefiPositionRow[]> {
   const txs = await fetchJSON(
     `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${heliusApiKey()}&limit=100`,
-    { vendor: "helius", schema: interactionsSchema, gate: heliusGate },
+    { vendor: "helius", schema: interactionsSchema, gate: heliusGate, signal },
   );
   const counts = new Map<string, number>();
   for (const tx of txs) {
@@ -436,18 +453,23 @@ function isDegradable(e: unknown): boolean {
 }
 
 async function scanWallet(wallet: string): Promise<WalletScan> {
+  const controller = new AbortController();
+  const { signal } = controller;
   const sources: Array<[DefiScanSource, () => Promise<DefiPositionRow[]>]> = [
-    ["kamino-lend", () => kaminoDeposits(wallet)],
-    ["owner-accounts", () => ownerAccountPositions(wallet)],
-    ["position-nfts", () => nftPositions(wallet)],
-    ["interactions", () => unknownInteractions(wallet)],
+    ["kamino-lend", () => kaminoDeposits(wallet, signal)],
+    ["owner-accounts", () => ownerAccountPositions(wallet, signal)],
+    ["position-nfts", () => nftPositions(wallet, signal)],
+    ["interactions", () => unknownInteractions(wallet, signal)],
   ];
   const outcomes = await Promise.all(
     sources.map(([source, run]) =>
       run().then(
         (rows) => ({ source, rows }),
         (e: unknown) => {
-          if (!isDegradable(e)) throw e;
+          if (!isDegradable(e)) {
+            controller.abort();
+            throw e;
+          }
           console.warn(
             `portfolio: defi source ${source} unavailable for ${wallet.slice(0, 4)}…: ${describeError(e)}`,
           );

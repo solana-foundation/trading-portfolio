@@ -254,6 +254,11 @@ describe("getDefiPositions", () => {
     await settle(Promise.resolve());
     expect(settled).toBe(true);
     expect(await p).toBeInstanceOf(ProviderAuthError);
+    const siblingSignals = fetchMock.mock.calls
+      .filter((c) => parseRpc(c[1])?.method === "getTokenAccountsByOwner")
+      .map((c) => c[1]?.signal as AbortSignal);
+    expect(siblingSignals.length).toBeGreaterThan(0);
+    expect(siblingSignals.every((sig) => sig.aborted)).toBe(true);
     releaseSibling();
   });
 
