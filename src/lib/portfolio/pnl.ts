@@ -4,6 +4,7 @@ import {
   getHistoricalPrices,
   getHoldings,
   getTokenMetas,
+  type VendorCounters,
 } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { mapLimit } from "@/lib/portfolio/concurrency";
@@ -28,6 +29,7 @@ import type {
 import { type Cashflow, computeXIRR } from "@/lib/portfolio/xirr";
 
 const resultCache = new TtlCache<TradePnLResult>(500, 5 * 60 * 1000);
+const vendorDegraded = new WeakSet<TradePnLResult>();
 const HOLDINGS_CONCURRENCY = MAX_WALLETS_PER_REQUEST;
 const TX_FETCH_CONCURRENCY = 4;
 
@@ -106,9 +108,10 @@ export async function getPortfolioHoldings(
 
 async function solPricesByDay(
   days: Iterable<number>,
+  counters: VendorCounters,
 ): Promise<Map<number, number>> {
   const queries = Array.from(days, (day) => ({ mint: SOL_MINT, ts: day }));
-  const prices = await getHistoricalPrices(queries);
+  const prices = await getHistoricalPrices(queries, counters);
   const out = new Map<number, number>();
   for (const q of queries) {
     const p = prices.get(`${SOL_MINT}:${q.ts}`);
@@ -142,6 +145,7 @@ export function getAggregateTradePnL(
   return resultCache.getOrFetch(
     aggregateCacheKey(wallets, holdings, netWorthUsd),
     () => computeAggregateTradePnL(wallets, holdings, netWorthUsd),
+    (result) => (vendorDegraded.has(result) ? 0 : undefined),
   );
 }
 
@@ -150,6 +154,7 @@ async function computeAggregateTradePnL(
   holdings: Holdings[],
   netWorthUsd?: number,
 ): Promise<TradePnLResult> {
+  const counters: VendorCounters = { refused: 0 };
   const txFetches = await mapLimit(wallets, TX_FETCH_CONCURRENCY, (w) =>
     fetchTransactions(w),
   );
@@ -159,7 +164,11 @@ async function computeAggregateTradePnL(
 
   const currentSolPrice =
     deriveSolPriceFromHoldings(holdings) ||
-    (await getHistoricalPrice(SOL_MINT, Math.floor(Date.now() / 1000))) ||
+    (await getHistoricalPrice(
+      SOL_MINT,
+      Math.floor(Date.now() / 1000),
+      counters,
+    )) ||
     0;
   const swapDays = new Set<number>();
   for (const txs of txsPerWallet) {
@@ -170,7 +179,7 @@ async function computeAggregateTradePnL(
       }
     }
   }
-  const solPriceByDay = await solPricesByDay(swapDays);
+  const solPriceByDay = await solPricesByDay(swapDays, counters);
   const todayDay = Math.floor(Date.now() / 1000 / 86400) * 86400;
   let solPriceFellBack = false;
   const solPriceAt = (ts: number) => {
@@ -342,6 +351,7 @@ async function computeAggregateTradePnL(
   }
   const priceMap = await getHistoricalPrices(
     Array.from(uniqueQueries.values()),
+    counters,
   );
 
   for (const ev of transferEvents) {
@@ -544,6 +554,7 @@ async function computeAggregateTradePnL(
   }
   const extPriceMap = await getHistoricalPrices(
     Array.from(extPriceQueries.values()),
+    counters,
   );
 
   const cashflowEvents: Cashflow[] = [];
@@ -597,7 +608,7 @@ async function computeAggregateTradePnL(
     const solQueries = new Set(
       cashflowEvents.map((c) => Math.floor(c.ts / 86400) * 86400),
     );
-    const benchSolPriceByDay = await solPricesByDay(solQueries);
+    const benchSolPriceByDay = await solPricesByDay(solQueries, counters);
     let netSol = 0;
     const bcfs: Cashflow[] = [];
     for (const c of cashflowEvents) {
@@ -702,7 +713,7 @@ async function computeAggregateTradePnL(
       avgCostPerToken: m.totalSpent / m.totalBought,
     }));
 
-  return {
+  const result: TradePnLResult = {
     perWallet,
     mintCosts,
     totals: { totalPnL, totalCostBasis, totalValue },
@@ -713,6 +724,8 @@ async function computeAggregateTradePnL(
     hasUnpriced,
     historyTruncated,
   };
+  if (counters.refused > 0) vendorDegraded.add(result);
+  return result;
 }
 
 export type { HeliusTx };

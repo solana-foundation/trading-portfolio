@@ -170,6 +170,24 @@ describe("getHistoricalPrices", () => {
     expect(peak).toBe(8);
   });
 
+  it("counts vendor refusals for the caller", async () => {
+    const m = mint();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock
+      .mockResolvedValueOnce(json({ success: false }))
+      .mockResolvedValueOnce(json({ success: true, data: { value: 1 } }));
+    const counters = { refused: 0 };
+    const out = await getHistoricalPrices(
+      [
+        { mint: m, ts: DAY * 10 },
+        { mint: m, ts: DAY * 11 },
+      ],
+      counters,
+    );
+    expect(out.size).toBe(2);
+    expect(counters.refused).toBe(1);
+  });
+
   it("skips zero timestamps", async () => {
     const out = await getHistoricalPrices([{ mint: mint(), ts: 0 }]);
     expect(out.size).toBe(0);

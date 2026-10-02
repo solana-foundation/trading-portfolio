@@ -287,9 +287,12 @@ export function isBirdeyeRefusal(e: unknown): e is VendorError {
   return e instanceof VendorError && e.vendor === "birdeye" && e.kind === "api";
 }
 
+export type VendorCounters = { refused: number };
+
 export async function getHistoricalPrice(
   mint: string,
   unixTs: number,
+  counters?: VendorCounters,
 ): Promise<number | null> {
   if (!unixTs || unixTs <= 0) return null;
   const dayTs = floorDayTs(unixTs);
@@ -301,6 +304,7 @@ export async function getHistoricalPrice(
     );
   } catch (e) {
     if (!isBirdeyeRefusal(e)) throw e;
+    if (counters) counters.refused += 1;
     console.warn(`portfolio: ${describeError(e)}`);
     return null;
   }
@@ -308,6 +312,7 @@ export async function getHistoricalPrice(
 
 export async function getHistoricalPrices(
   queries: ReadonlyArray<{ mint: string; ts: number }>,
+  counters?: VendorCounters,
 ): Promise<Map<string, number | null>> {
   const unique = new Map<string, { mint: string; dayTs: number }>();
   for (const q of queries) {
@@ -317,7 +322,7 @@ export async function getHistoricalPrices(
   }
   const entries = Array.from(unique.entries());
   const prices = await mapLimit(entries, BIRDEYE_CONCURRENCY, ([, q]) =>
-    getHistoricalPrice(q.mint, q.dayTs),
+    getHistoricalPrice(q.mint, q.dayTs, counters),
   );
   const out = new Map<string, number | null>();
   for (let i = 0; i < entries.length; i++) out.set(entries[i][0], prices[i]);
