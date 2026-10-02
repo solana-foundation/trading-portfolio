@@ -175,6 +175,29 @@ describe("getDefiPositions", () => {
     ]);
   });
 
+  it("does not count an NFT detected by one protocol as unscanned when another probe fails", async () => {
+    const w = wallet();
+    install((_url, rpc) => {
+      if (rpc?.method === "getTokenAccountsByOwner") {
+        const programId = (rpc.params[1] as { programId: string }).programId;
+        return programId.startsWith("Tokenkeg")
+          ? json({ result: { value: [nftAccount(NFT_A)] } })
+          : json({ result: { value: [] } });
+      }
+      if (rpc?.method === "getProgramAccounts" && memcmpBytes(rpc) === NFT_A) {
+        return programOf(rpc) === WHIRLPOOL
+          ? json({ result: [sliced("pos")] })
+          : json({}, 503);
+      }
+      return undefined;
+    });
+    const result = await settle(getDefiPositions([w]));
+    expect(result.partial).toBe(true);
+    expect(result.positions.map((p) => [p.protocol, p.type, p.count])).toEqual([
+      ["orca-whirlpool", "position", 1],
+    ]);
+  });
+
   it("keeps successful NFT detections when one probe fails, counting it as unscanned", async () => {
     const w = wallet();
     install((_url, rpc) => {

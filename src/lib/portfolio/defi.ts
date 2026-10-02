@@ -375,7 +375,10 @@ async function nftPositions(
   const unmatchedNfts = scanned.filter(
     (m) => !claimed.has(m) && !unprobed.has(m),
   ).length;
-  const unscannedNfts = nftMints.length - scanned.length + unprobed.size;
+  const unscannedNfts =
+    nftMints.length -
+    scanned.length +
+    [...unprobed].filter((m) => !claimed.has(m)).length;
   if (unmatchedNfts > 0) {
     rows.push({
       wallet,
