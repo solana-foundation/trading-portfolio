@@ -442,6 +442,25 @@ async function syncWalletExclusive(
   }
 }
 
+export function runAfterInFlight<T>(
+  inFlight: Map<string, Promise<T>>,
+  key: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = inFlight.get(key);
+  const settled = previous
+    ? previous.then(
+        () => undefined,
+        () => undefined,
+      )
+    : Promise.resolve();
+  const p: Promise<T> = settled.then(run).finally(() => {
+    if (inFlight.get(key) === p) inFlight.delete(key);
+  });
+  inFlight.set(key, p);
+  return p;
+}
+
 const syncInFlight = new Map<string, Promise<SyncOutcome>>();
 
 function syncWallet(
@@ -449,14 +468,9 @@ function syncWallet(
   todayDay: number,
   deadline: number,
 ): Promise<SyncOutcome> {
-  const key = `${wallet}:${todayDay}`;
-  const inFlight = syncInFlight.get(key);
-  if (inFlight) return inFlight;
-  const p = syncWalletExclusive(wallet, todayDay, deadline).finally(() =>
-    syncInFlight.delete(key),
+  return runAfterInFlight(syncInFlight, wallet, () =>
+    syncWalletExclusive(wallet, todayDay, deadline),
   );
-  syncInFlight.set(key, p);
-  return p;
 }
 
 export async function getValueHistory(

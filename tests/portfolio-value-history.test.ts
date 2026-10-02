@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireLockedClient,
+  runAfterInFlight,
   seriesOrSkip,
   withTransaction,
 } from "@/lib/portfolio/value-history";
@@ -177,5 +178,33 @@ describe("seriesOrSkip", () => {
     expect(fetchSeries).toHaveBeenCalledTimes(1);
     expect(seriesOrSkip("m", 0, 1, Date.now() - 1, fetchSeries)).toBeNull();
     expect(fetchSeries).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runAfterInFlight", () => {
+  it("runs a later caller after the in-flight one settles, with its own run", async () => {
+    const map = new Map<string, Promise<string>>();
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    const order: string[] = [];
+    const first = runAfterInFlight(map, "w", async () => {
+      order.push("first start");
+      await firstStarted;
+      order.push("first end");
+      throw new Error("first failed");
+    });
+    const second = runAfterInFlight(map, "w", async () => {
+      order.push("second start");
+      return "second ok";
+    });
+    await Promise.resolve();
+    expect(order).toEqual(["first start"]);
+    releaseFirst();
+    await expect(first).rejects.toThrow("first failed");
+    expect(await second).toBe("second ok");
+    expect(order).toEqual(["first start", "first end", "second start"]);
+    expect(map.size).toBe(0);
   });
 });
