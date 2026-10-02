@@ -55,6 +55,8 @@ export type WalletSwapEvents = {
 
 export type SolPriceAt = (ts: number) => number;
 
+const MAX_DECIMALS = 18;
+
 export function txType(tx: HeliusTx | undefined): string | undefined {
   return typeof tx?.type === "string" ? tx.type.toUpperCase() : undefined;
 }
@@ -75,6 +77,9 @@ function rawToFloat(rawTokenAmount: RawTokenAmount | undefined): number | null {
   const raw = parseAmount(rawTokenAmount.tokenAmount);
   const decimals = parseAmount(rawTokenAmount.decimals);
   if (raw === null || decimals === null) return null;
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > MAX_DECIMALS) {
+    return null;
+  }
   return raw / 10 ** decimals;
 }
 

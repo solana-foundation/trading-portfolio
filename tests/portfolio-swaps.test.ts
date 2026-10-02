@@ -409,3 +409,36 @@ describe("unrelated malformed transfers", () => {
     expect(buys.get(MINT)?.amountBought).toBe(5);
   });
 });
+
+describe("invalid decimals", () => {
+  it("treats negative, fractional, or absurd decimals as malformed instead of scaling by them", async () => {
+    const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    for (const decimals of [-50, 1.5, 400]) {
+      const tx = {
+        type: "SWAP",
+        timestamp: 1_700_000_000,
+        signature: `dec${decimals}`,
+        events: {
+          swap: {
+            nativeInput: { account: WALLET, amount: "1000000000" },
+            tokenOutputs: [
+              {
+                userAccount: WALLET,
+                mint: "MintGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+                rawTokenAmount: { tokenAmount: "1", decimals },
+              },
+            ],
+          },
+        },
+      };
+      const { buys, unpricedSwaps } = aggregateSwapEvents(
+        WALLET,
+        [tx as never],
+        () => 100,
+      );
+      expect(unpricedSwaps).toBe(1);
+      expect(buys.size).toBe(0);
+    }
+  });
+});
