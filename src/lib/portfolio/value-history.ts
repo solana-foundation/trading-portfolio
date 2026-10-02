@@ -2,9 +2,10 @@ import type { PoolClient } from "pg";
 import {
   getHoldings,
   getNetWorthHistory,
-  getPriceSeries,
+  getPriceSeriesUntil,
   getRawBalances,
   isBirdeyeRefusal,
+  type PriceSeries,
 } from "@/lib/portfolio/birdeye";
 import { mapLimit } from "@/lib/portfolio/concurrency";
 import {
@@ -113,8 +114,8 @@ export function seriesOrSkip(
   fromTs: number,
   toTs: number,
   deadline: number,
-  fetchSeries: typeof getPriceSeries = getPriceSeries,
-): Promise<Map<number, number>> | null {
+  fetchSeries: typeof getPriceSeriesUntil = getPriceSeriesUntil,
+): Promise<PriceSeries> | null {
   if (Date.now() >= deadline) return null;
   return fetchSeries(mint, fromTs, toTs, deadline);
 }
@@ -174,16 +175,18 @@ async function pricesFor(
       cutShort = true;
       return Promise.resolve(new Map<number, number>());
     }
-    return pending.catch((e: unknown) => {
-      if (e instanceof DeadlineError) {
-        cutShort = true;
+    return pending.then(
+      (fetched) => {
+        if (!fetched.complete) cutShort = true;
+        return fetched.series;
+      },
+      (e: unknown) => {
+        if (!isBirdeyeRefusal(e)) throw e;
+        refused = true;
+        console.warn(`portfolio: ${describeError(e)}`);
         return new Map<number, number>();
-      }
-      if (!isBirdeyeRefusal(e)) throw e;
-      refused = true;
-      console.warn(`portfolio: ${describeError(e)}`);
-      return new Map<number, number>();
-    });
+      },
+    );
   });
   const newRows: Array<[string, number, number]> = [];
   needFetch.forEach((mint, i) => {

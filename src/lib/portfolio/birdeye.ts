@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { createLimiter, mapLimit } from "@/lib/portfolio/concurrency";
-import { DeadlineError } from "@/lib/portfolio/deadline";
 import {
   describeError,
   ProviderAuthError,
@@ -26,7 +25,7 @@ const CANONICAL_MINTS: Record<string, string> = {
 };
 
 const DUST_THRESHOLD_USD = 0.01;
-const BIRDEYE_CONCURRENCY = 8;
+const LOOKUP_CONCURRENCY = 8;
 const TOKEN_LIST_CONCURRENCY = 2 * MAX_WALLETS_PER_REQUEST;
 const TOKEN_LIST_ATTEMPT_TIMEOUT_MS = 20_000;
 const TOKEN_LIST_BUDGET_MS = 40_000;
@@ -44,7 +43,7 @@ type TokenListItem = {
 
 export type TokenMeta = { symbol: string; icon?: string };
 
-const birdeyeGate = createLimiter(BIRDEYE_CONCURRENCY);
+const lookupGate = createLimiter(LOOKUP_CONCURRENCY);
 const tokenListGate = createLimiter(TOKEN_LIST_CONCURRENCY);
 const tokenListCache = new TtlCache<TokenListItem[]>(1_000, 2 * 60 * 1000);
 const histPriceCache = new TtlCache<number | null>(10_000, WEEK_MS);
@@ -78,7 +77,7 @@ function birdeyeFetch<S extends z.ZodType>(
     vendor: "birdeye",
     schema,
     init: { headers: birdeyeHeaders() },
-    gate: birdeyeGate,
+    gate: lookupGate,
     ...overrides,
   });
 }
@@ -322,7 +321,7 @@ export async function getHistoricalPrices(
     unique.set(`${q.mint}:${dayTs}`, { mint: q.mint, dayTs });
   }
   const entries = Array.from(unique.entries());
-  const prices = await mapLimit(entries, BIRDEYE_CONCURRENCY, ([, q]) =>
+  const prices = await mapLimit(entries, LOOKUP_CONCURRENCY, ([, q]) =>
     getHistoricalPrice(q.mint, q.dayTs, counters),
   );
   const out = new Map<string, number | null>();
@@ -332,27 +331,39 @@ export async function getHistoricalPrices(
 
 const SERIES_CHUNK_DAYS = 800;
 const SERIES_BUDGET_MS = 40_000;
+const DEADLINE_SLACK_MS = 50;
 
-export async function getPriceSeries(
+export type PriceSeries = { series: Map<number, number>; complete: boolean };
+
+async function collectPriceSeries(
   mint: string,
   fromTs: number,
   toTs: number,
   deadline?: number,
-): Promise<Map<number, number>> {
-  const out = new Map<number, number>();
+): Promise<PriceSeries> {
+  const series = new Map<number, number>();
   const path = "/defi/history_price";
   for (let from = fromTs; from <= toTs; from += SERIES_CHUNK_DAYS * 86_400) {
     const to = Math.min(from + SERIES_CHUNK_DAYS * 86_400 - 1, toTs);
     const remaining =
       deadline === undefined ? SERIES_BUDGET_MS : deadline - Date.now();
-    if (remaining <= 0) {
-      throw new DeadlineError(`price series of ${mint.slice(0, 4)}…`);
+    if (remaining <= 0) return { series, complete: false };
+    let data: z.output<typeof priceSeriesSchema>;
+    try {
+      data = await birdeyeFetch(
+        `https://public-api.birdeye.so${path}?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
+        priceSeriesSchema,
+        { budgetMs: Math.min(SERIES_BUDGET_MS, remaining) },
+      );
+    } catch (e) {
+      const cutByDeadline =
+        deadline !== undefined &&
+        e instanceof VendorError &&
+        e.kind === "timeout" &&
+        Date.now() >= deadline - DEADLINE_SLACK_MS;
+      if (cutByDeadline) return { series, complete: false };
+      throw e;
     }
-    const data = await birdeyeFetch(
-      `https://public-api.birdeye.so${path}?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
-      priceSeriesSchema,
-      { budgetMs: Math.min(SERIES_BUDGET_MS, remaining) },
-    );
     if (data.success !== true) {
       throw refusal(path, `price series of ${mint.slice(0, 4)}…`, data.message);
     }
@@ -363,11 +374,28 @@ export async function getPriceSeries(
         typeof item.value === "number" &&
         item.value > 0
       ) {
-        out.set(floorDayTs(item.unixTime), item.value);
+        series.set(floorDayTs(item.unixTime), item.value);
       }
     }
   }
-  return out;
+  return { series, complete: true };
+}
+
+export async function getPriceSeries(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+): Promise<Map<number, number>> {
+  return (await collectPriceSeries(mint, fromTs, toTs)).series;
+}
+
+export function getPriceSeriesUntil(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+  deadline: number,
+): Promise<PriceSeries> {
+  return collectPriceSeries(mint, fromTs, toTs, deadline);
 }
 
 const NET_WORTH_MAX_DAYS = 90;
@@ -440,7 +468,7 @@ export async function getTokenMetas(
   mints: ReadonlyArray<string>,
 ): Promise<Map<string, TokenMeta>> {
   const unique = Array.from(new Set(mints));
-  const metas = await mapLimit(unique, BIRDEYE_CONCURRENCY, (mint) =>
+  const metas = await mapLimit(unique, LOOKUP_CONCURRENCY, (mint) =>
     getTokenMeta(mint),
   );
   const out = new Map<string, TokenMeta>();

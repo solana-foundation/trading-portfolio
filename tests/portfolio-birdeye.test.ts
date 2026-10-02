@@ -5,10 +5,10 @@ import {
   getHoldings,
   getNetWorthHistory,
   getPriceSeries,
+  getPriceSeriesUntil,
   getTokenMeta,
   getTokenMetas,
 } from "@/lib/portfolio/birdeye";
-import { DeadlineError } from "@/lib/portfolio/deadline";
 import { ProviderAuthError, VendorError } from "@/lib/portfolio/errors";
 
 const DAY = 86_400;
@@ -224,7 +224,7 @@ describe("getPriceSeries", () => {
     }
   });
 
-  it("stops between chunks once the caller's deadline has passed", async () => {
+  it("returns the chunks already fetched when the deadline passes between chunks", async () => {
     const m = mint();
     const deadline = Date.now() + 5_000;
     fetchMock.mockImplementationOnce(async () => {
@@ -234,18 +234,27 @@ describe("getPriceSeries", () => {
         data: { items: [{ unixTime: DAY, value: 1 }] },
       });
     });
-    const err = await getPriceSeries(m, 0, DAY * 1000, deadline).catch(
-      (e) => e,
-    );
-    expect(err).toBeInstanceOf(DeadlineError);
+    const out = await getPriceSeriesUntil(m, 0, DAY * 1000, deadline);
+    expect(out.complete).toBe(false);
+    expect(Array.from(out.series.entries())).toEqual([[DAY, 1]]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("treats a chunk that times out at the deadline as cut short, not a failure", async () => {
+    const m = mint();
+    const deadline = Date.now() + 5_000;
+    fetchMock.mockImplementation(async () => {
+      vi.setSystemTime(deadline + 1);
+      throw new DOMException("timed out", "TimeoutError");
+    });
+    const out = await settle(getPriceSeriesUntil(m, 0, DAY, deadline));
+    expect(out.complete).toBe(false);
+    expect(out.series.size).toBe(0);
+  });
+
   it("does not start a series whose deadline has already passed", async () => {
-    const err = await getPriceSeries(mint(), 0, DAY, Date.now() - 1).catch(
-      (e) => e,
-    );
-    expect(err).toBeInstanceOf(DeadlineError);
+    const out = await getPriceSeriesUntil(mint(), 0, DAY, Date.now() - 1);
+    expect(out.complete).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

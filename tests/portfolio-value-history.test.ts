@@ -167,7 +167,10 @@ describe("acquireLockedClient", () => {
 
 describe("seriesOrSkip", () => {
   it("fetches before the deadline and skips after it", async () => {
-    const fetchSeries = vi.fn(async () => new Map([[86_400, 2]]));
+    const fetchSeries = vi.fn(async () => ({
+      series: new Map([[86_400, 2]]),
+      complete: true,
+    }));
     const before = await seriesOrSkip(
       "m",
       0,
@@ -175,7 +178,7 @@ describe("seriesOrSkip", () => {
       Date.now() + 10_000,
       fetchSeries,
     );
-    expect(before?.get(86_400)).toBe(2);
+    expect(before?.series.get(86_400)).toBe(2);
     expect(fetchSeries).toHaveBeenCalledTimes(1);
     expect(seriesOrSkip("m", 0, 1, Date.now() - 1, fetchSeries)).toBeNull();
     expect(fetchSeries).toHaveBeenCalledTimes(1);
