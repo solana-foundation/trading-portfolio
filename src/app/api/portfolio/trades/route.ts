@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { requestBudget } from "@/lib/portfolio/deadline";
 import { mapError } from "@/lib/portfolio/errors";
 import {
   getAggregateTradePnL,
@@ -11,6 +12,8 @@ import type { TradeHistoryRow } from "@/lib/portfolio/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const REQUEST_BUDGET_MS = 110_000;
+
 export const maxDuration = 120;
 
 const DEFAULT_LIMIT = 100;
@@ -52,13 +55,12 @@ export async function POST(request: Request) {
   const cursor = parseCursor(parsed.body.cursor as string | undefined);
   const mint = parsed.body.mint as string | undefined;
 
+  const within = requestBudget(REQUEST_BUDGET_MS, "trades");
   try {
-    const holdings = await getPortfolioHoldings(parsed.wallets);
+    const holdings = await within(getPortfolioHoldings(parsed.wallets));
     const netWorth = holdings.reduce((s, h) => s + h.totalValue, 0);
-    const result = await getAggregateTradePnL(
-      parsed.wallets,
-      holdings,
-      netWorth,
+    const result = await within(
+      getAggregateTradePnL(parsed.wallets, holdings, netWorth),
     );
 
     let trades = result.tradeHistory;

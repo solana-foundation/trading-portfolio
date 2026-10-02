@@ -1,3 +1,4 @@
+import { DeadlineError } from "@/lib/portfolio/deadline";
 export type Vendor = "birdeye" | "helius" | "triton";
 
 export type VendorErrorKind =
@@ -62,6 +63,13 @@ export function mapError(
   e: unknown,
   fallback: string,
 ): { status: 502; error: string } {
+  if (e instanceof DeadlineError) {
+    console.error("portfolio: request deadline:", describeError(e));
+    return {
+      status: 502,
+      error: "Request exceeded its time budget; retry shortly.",
+    };
+  }
   if (
     e instanceof ProviderAuthError ||
     (e instanceof VendorError && e.kind === "config")

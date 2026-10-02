@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { classifyHolding } from "@/lib/portfolio/birdeye";
+import { requestBudget } from "@/lib/portfolio/deadline";
 import { mapError } from "@/lib/portfolio/errors";
 import { getPortfolioHoldings } from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
@@ -7,6 +8,8 @@ import type { TokenHolding } from "@/lib/portfolio/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const REQUEST_BUDGET_MS = 55_000;
+
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
@@ -17,8 +20,9 @@ export async function POST(request: Request) {
       { status: parsed.status },
     );
   }
+  const within = requestBudget(REQUEST_BUDGET_MS, "holdings");
   try {
-    const holdings = await getPortfolioHoldings(parsed.wallets);
+    const holdings = await within(getPortfolioHoldings(parsed.wallets));
 
     const merged = new Map<string, TokenHolding>();
     for (const h of holdings) {
