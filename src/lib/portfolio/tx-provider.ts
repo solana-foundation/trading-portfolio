@@ -327,7 +327,7 @@ export function fetchTransactions(
   wallet: string,
   maxPages = DEFAULT_MAX_PAGES,
 ): Promise<TxFetchResult> {
-  return txCache.getOrFetch(wallet, () =>
+  return txCache.getOrFetch(`${wallet}:${maxPages}`, () =>
     fetchTransactionsUncached(wallet, maxPages),
   );
 }

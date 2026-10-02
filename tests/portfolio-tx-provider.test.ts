@@ -269,6 +269,26 @@ describe("fetchTransactions", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not serve a shallow crawl to a deeper request", async () => {
+    const w = wallet();
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (isRpc(url)) return json(emptyAccounts);
+      if (isHelius(url)) {
+        return url.includes("before=")
+          ? json([tx("tail", 1)])
+          : json(fullPage("p", 1000));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const shallow = await fetchTransactions(w, 1);
+    expect(shallow.truncated).toBe(true);
+    expect(shallow.txs).toHaveLength(100);
+    const deep = await fetchTransactions(w);
+    expect(deep.truncated).toBe(false);
+    expect(deep.txs).toHaveLength(101);
+  });
+
   it("shares one crawl between concurrent callers", async () => {
     const w = wallet();
     routes([
