@@ -14,6 +14,7 @@ All aggregation endpoints are stateless: wallet list in, merged result out, noth
 | `POST /api/portfolio/holdings` | `{wallets[]}` | Per-wallet and merged-by-token balances with USD values |
 | `POST /api/portfolio/pnl` | `{wallets[]}` | Per-asset cost basis, average cost, unrealized PnL, per wallet and across the group |
 | `POST /api/portfolio/trades` | `{wallets[], limit?, cursor?, mint?}` | Priced trade history (swaps + external transfer-ins), stable-cursor paginated |
+| `POST /api/portfolio/defi` | `{wallets[]}` | Positions held inside DeFi programs (Kamino deposits, owner-account and position-NFT detections, unknown-program interactions); see `docs/defi-coverage.md` |
 | `POST /api/portfolio/value-history` | `{wallets[]}` | Daily portfolio value series from Postgres: first request lazily backfills a wallet's full available history, later requests read the store, top up missing days, and compute today live. Per-wallet rows are write-once and shared; wallets untouched for 90 days are pruned. Requires `DATABASE_URL`; migrations in `db/migrations` (`db/apply.sh`) |
 
 The hosted deployment is private: Cloud Run requires an IAM-authorized identity (`roles/run.invoker`), and callers send a Google-signed ID token with the service URL as audience (`Authorization: Bearer $(gcloud auth print-identity-token)` for ad-hoc use; internal services impersonate the `portfolio-invoker-prd` service account). Self-hosting from this repo has no such gate — bring your own keys and add your own auth.
@@ -24,9 +25,9 @@ Common to every endpoint:
 
 - `POST` with `Content-Type: application/json`.
 - Body always includes `wallets`: array of 1–20 base58 Solana addresses; duplicates are deduplicated. Extra unknown fields are rejected where noted.
-- Errors: `400 {"error": string}` for invalid input, `429 {"error": string}` when the per-instance rate limit (30 requests/min) is exceeded — back off and retry shortly, `502 {"error": string}` when an upstream data provider fails (responses are never partial-as-complete — retry), `503` from `value-history` when no store is configured.
+- Errors: `400 {"error": string}` for invalid input, `429 {"error": string}` when the per-instance rate limit (30 requests/min) is exceeded — back off and retry shortly, `502 {"error": string}` when an upstream data provider fails (transient upstream failures — 429, 5xx, network, timeout — are retried with jittered backoff before a 502 is returned; responses are never partial-as-complete — retry), `503` from `value-history` when no store is configured.
 - Numbers are plain JSON numbers in USD unless stated; timestamps `ts` are unix seconds; `day` is `YYYY-MM-DD` (UTC).
-- Degradation is always surfaced, never guessed: watch `hasUnpriced`, `historyTruncated`, `partial`, `hasUnpricedDays`.
+- Degradation is always surfaced, never guessed: watch `hasUnpriced`, `historyTruncated`, `partial`, `hasUnpricedDays`, and `failed` on `/defi`.
 
 ### `POST /api/portfolio/summary`
 
@@ -155,6 +156,37 @@ Request: `{"wallets": ["..."], "limit": 100, "cursor": "<opaque>", "mint": "<min
 
 Events that cannot be valued at their event day are excluded from this list
 entirely (and surfaced via `hasUnpriced` on `/pnl`), never shown at $0.
+
+### `POST /api/portfolio/defi`
+
+Request: `{"wallets": ["..."]}`
+
+```jsonc
+{
+  "positions": [
+    { "wallet": "<wallet>", "protocol": "kamino-lend", "type": "deposit",
+      "mint": "<mint>", "symbol": "USDC", "valueUsd": 1204.5, "count": 1 },
+    { "wallet": "<wallet>", "protocol": "marginfi", "type": "position",
+      "mint": null, "symbol": null, "valueUsd": null, "count": 2 },
+    { "wallet": "<wallet>", "protocol": "unknown", "type": "interaction",
+      "mint": null, "symbol": null, "valueUsd": null, "count": 14,
+      "programId": "<program>" }
+  ],
+  "hasUnvalued": true,              // some rows have no USD value
+  "partial": false,                 // true when any source below failed for any wallet
+  "failed": [                       // one entry per (wallet, source) that could not be scanned
+    { "wallet": "<wallet>", "source": "interactions" }
+  ]
+}
+```
+
+Each wallet is scanned by four independent sources: `kamino-lend`,
+`owner-accounts`, `position-nfts`, and `interactions`. A vendor failure
+on one source (after retries) does not fail the request: the source is
+listed in `failed`, `partial` is `true`, and the wallet is not cached so
+the next request retries it. Provider auth and configuration failures
+still return `502`. Row `type` is one of `deposit`, `position`,
+`interaction`, `unmatched-nft`, `unscanned-nft`.
 
 ### `POST /api/portfolio/value-history`
 
