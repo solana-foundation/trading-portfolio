@@ -1,13 +1,19 @@
 import { z } from "zod";
-import { getTokenMeta } from "@/lib/portfolio/birdeye";
+import { getTokenMetas } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { mapLimit } from "@/lib/portfolio/concurrency";
+import {
+  describeError,
+  ProviderAuthError,
+  VendorError,
+} from "@/lib/portfolio/errors";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
 import {
   heliusApiKey,
   heliusGate,
   heliusRpcUrl,
-  jsonRpcSchema,
+  isAuthError,
+  rpcResponse,
 } from "@/lib/portfolio/tx-provider";
 import type { DefiPositionRow } from "@/lib/portfolio/types";
 
@@ -108,10 +114,14 @@ function b58encode(bytes: Uint8Array): string {
   return out;
 }
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+async function rpc<S extends z.ZodType>(
+  method: string,
+  params: unknown[],
+  result: S,
+): Promise<z.output<S>> {
   const resp = await fetchJSON(heliusRpcUrl(), {
     vendor: "helius",
-    schema: jsonRpcSchema,
+    schema: rpcResponse(result),
     gate: heliusGate,
     init: {
       method: "POST",
@@ -120,23 +130,81 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
     },
   });
   if (resp.error) {
-    throw new Error(`rpc ${method}: ${resp.error.message || "failed"}`);
+    const msg = resp.error.message || JSON.stringify(resp.error);
+    if (isAuthError(resp.error.code ?? undefined, msg)) {
+      throw new ProviderAuthError({
+        vendor: "helius",
+        path: method,
+        message: `helius rpc: ${msg}`,
+      });
+    }
+    throw new VendorError({
+      vendor: "helius",
+      kind: "api",
+      path: method,
+      message: `rpc ${method}: ${msg}`,
+    });
   }
-  return resp.result as T;
+  if (resp.result == null) {
+    throw new VendorError({
+      vendor: "helius",
+      kind: "shape",
+      path: method,
+      message: `rpc ${method}: missing result`,
+    });
+  }
+  return resp.result;
 }
 
-type ProgramAccount = { pubkey: string; account: { data: [string, string] } };
+const accountDataSchema = z.tuple([z.string(), z.string()]);
+
+const programAccountsSchema = z.array(
+  z.looseObject({
+    pubkey: z.string(),
+    account: z.looseObject({ data: accountDataSchema }),
+  }),
+);
+
+const multipleAccountsSchema = z.looseObject({
+  value: z.array(z.looseObject({ data: accountDataSchema }).nullable()),
+});
+
+const parsedTokenAccountsSchema = z.looseObject({
+  value: z.array(
+    z.looseObject({
+      account: z.looseObject({
+        data: z.looseObject({
+          parsed: z.looseObject({
+            info: z.looseObject({
+              mint: z.string(),
+              tokenAmount: z.looseObject({
+                amount: z.string(),
+                decimals: z.number(),
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+  ),
+});
 
 const reserveMintCache = new TtlCache<string>(2_000, 24 * 60 * 60 * 1000);
 
 async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
-  const obligations = await rpc<ProgramAccount[]>("getProgramAccounts", [
-    KLEND,
-    {
-      encoding: "base64",
-      filters: [{ memcmp: { offset: OBLIGATION_OWNER_OFFSET, bytes: wallet } }],
-    },
-  ]);
+  const obligations = await rpc(
+    "getProgramAccounts",
+    [
+      KLEND,
+      {
+        encoding: "base64",
+        filters: [
+          { memcmp: { offset: OBLIGATION_OWNER_OFFSET, bytes: wallet } },
+        ],
+      },
+    ],
+    programAccountsSchema,
+  );
   const deposits: Array<{ reserve: string; valueUsd: number }> = [];
   for (const acc of obligations) {
     const data = Buffer.from(acc.account.data[0], "base64");
@@ -156,9 +224,11 @@ async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
     .map((d) => d.reserve)
     .filter((r) => reserveMintCache.get(r) === undefined);
   if (unknownReserves.length > 0) {
-    const infos = await rpc<{
-      value: Array<{ data: [string, string] } | null>;
-    }>("getMultipleAccounts", [unknownReserves, { encoding: "base64" }]);
+    const infos = await rpc(
+      "getMultipleAccounts",
+      [unknownReserves, { encoding: "base64" }],
+      multipleAccountsSchema,
+    );
     unknownReserves.forEach((reserve, i) => {
       const info = infos.value[i];
       if (!info) return;
@@ -170,10 +240,14 @@ async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
     });
   }
 
+  const mints = deposits
+    .map((d) => reserveMintCache.get(d.reserve))
+    .filter((m): m is string => Boolean(m));
+  const metas = await getTokenMetas(mints);
   const rows: DefiPositionRow[] = [];
   for (const d of deposits) {
     const mint = reserveMintCache.get(d.reserve) || null;
-    const meta = mint ? await getTokenMeta(mint) : null;
+    const meta = mint ? metas.get(mint) : undefined;
     rows.push({
       wallet,
       protocol: "kamino-lend",
@@ -192,14 +266,18 @@ async function ownerAccountPositions(
 ): Promise<DefiPositionRow[]> {
   const rows: DefiPositionRow[] = [];
   for (const proto of OWNER_ACCOUNT_PROTOCOLS) {
-    const res = await rpc<ProgramAccount[]>("getProgramAccounts", [
-      proto.program,
-      {
-        encoding: "base64",
-        dataSlice: { offset: 0, length: 0 },
-        filters: [{ memcmp: { offset: proto.ownerOffset, bytes: wallet } }],
-      },
-    ]);
+    const res = await rpc(
+      "getProgramAccounts",
+      [
+        proto.program,
+        {
+          encoding: "base64",
+          dataSlice: { offset: 0, length: 0 },
+          filters: [{ memcmp: { offset: proto.ownerOffset, bytes: wallet } }],
+        },
+      ],
+      programAccountsSchema,
+    );
     if (res.length > 0) {
       rows.push({
         wallet,
@@ -215,31 +293,14 @@ async function ownerAccountPositions(
   return rows;
 }
 
-async function nftPositions(wallet: string): Promise<{
-  rows: DefiPositionRow[];
-  unmatchedNfts: number;
-  unscannedNfts: number;
-}> {
+async function nftPositions(wallet: string): Promise<DefiPositionRow[]> {
   const nftMints: string[] = [];
   for (const programId of TOKEN_PROGRAMS) {
-    const res = await rpc<{
-      value: Array<{
-        account: {
-          data: {
-            parsed: {
-              info: {
-                mint: string;
-                tokenAmount: { amount: string; decimals: number };
-              };
-            };
-          };
-        };
-      }>;
-    }>("getTokenAccountsByOwner", [
-      wallet,
-      { programId },
-      { encoding: "jsonParsed" },
-    ]);
+    const res = await rpc(
+      "getTokenAccountsByOwner",
+      [wallet, { programId }, { encoding: "jsonParsed" }],
+      parsedTokenAccountsSchema,
+    );
     for (const acc of res.value) {
       const info = acc.account.data.parsed.info;
       if (info.tokenAmount.decimals === 0 && info.tokenAmount.amount === "1") {
@@ -252,14 +313,18 @@ async function nftPositions(wallet: string): Promise<{
   const rows: DefiPositionRow[] = [];
   for (const proto of POSITION_NFT_PROTOCOLS) {
     const hits = await mapLimit(scanned, NFT_PROBE_CONCURRENCY, (mint) =>
-      rpc<ProgramAccount[]>("getProgramAccounts", [
-        proto.program,
-        {
-          encoding: "base64",
-          dataSlice: { offset: 0, length: 0 },
-          filters: [{ memcmp: { offset: proto.mintOffset, bytes: mint } }],
-        },
-      ]),
+      rpc(
+        "getProgramAccounts",
+        [
+          proto.program,
+          {
+            encoding: "base64",
+            dataSlice: { offset: 0, length: 0 },
+            filters: [{ memcmp: { offset: proto.mintOffset, bytes: mint } }],
+          },
+        ],
+        programAccountsSchema,
+      ),
     );
     let count = 0;
     hits.forEach((res, i) => {
@@ -280,11 +345,31 @@ async function nftPositions(wallet: string): Promise<{
       });
     }
   }
-  return {
-    rows,
-    unmatchedNfts: scanned.filter((m) => !claimed.has(m)).length,
-    unscannedNfts: nftMints.length - scanned.length,
-  };
+  const unmatchedNfts = scanned.filter((m) => !claimed.has(m)).length;
+  const unscannedNfts = nftMints.length - scanned.length;
+  if (unmatchedNfts > 0) {
+    rows.push({
+      wallet,
+      protocol: "unknown",
+      type: "unmatched-nft",
+      mint: null,
+      symbol: null,
+      valueUsd: null,
+      count: unmatchedNfts,
+    });
+  }
+  if (unscannedNfts > 0) {
+    rows.push({
+      wallet,
+      protocol: "unknown",
+      type: "unscanned-nft",
+      mint: null,
+      symbol: null,
+      valueUsd: null,
+      count: unscannedNfts,
+    });
+  }
+  return rows;
 }
 
 const interactionsSchema = z.array(
@@ -323,52 +408,75 @@ async function unknownInteractions(wallet: string): Promise<DefiPositionRow[]> {
     }));
 }
 
-const defiCache = new TtlCache<DefiPositionRow[]>(500, 5 * 60 * 1000);
+export type DefiScanSource =
+  | "kamino-lend"
+  | "owner-accounts"
+  | "position-nfts"
+  | "interactions";
 
-async function scanWallet(wallet: string): Promise<DefiPositionRow[]> {
-  const [kamino, ownerRows, nft, unknown] = await Promise.all([
-    kaminoDeposits(wallet),
-    ownerAccountPositions(wallet),
-    nftPositions(wallet),
-    unknownInteractions(wallet),
-  ]);
-  const rows = [...kamino, ...ownerRows, ...nft.rows, ...unknown];
-  if (nft.unmatchedNfts > 0) {
-    rows.push({
-      wallet,
-      protocol: "unknown",
-      type: "unmatched-nft",
-      mint: null,
-      symbol: null,
-      valueUsd: null,
-      count: nft.unmatchedNfts,
-    });
+export type DefiScanFailure = { wallet: string; source: DefiScanSource };
+
+type WalletScan = { rows: DefiPositionRow[]; failed: DefiScanFailure[] };
+
+export type DefiPositionsResult = {
+  positions: DefiPositionRow[];
+  hasUnvalued: boolean;
+  partial: boolean;
+  failed: DefiScanFailure[];
+};
+
+const defiCache = new TtlCache<WalletScan>(500, 5 * 60 * 1000);
+
+function isDegradable(e: unknown): boolean {
+  if (!(e instanceof VendorError)) return false;
+  if (e instanceof ProviderAuthError) return false;
+  return e.kind !== "config";
+}
+
+async function scanWallet(wallet: string): Promise<WalletScan> {
+  const sources: Array<[DefiScanSource, () => Promise<DefiPositionRow[]>]> = [
+    ["kamino-lend", () => kaminoDeposits(wallet)],
+    ["owner-accounts", () => ownerAccountPositions(wallet)],
+    ["position-nfts", () => nftPositions(wallet)],
+    ["interactions", () => unknownInteractions(wallet)],
+  ];
+  const settled = await Promise.allSettled(sources.map(([, run]) => run()));
+  const rows: DefiPositionRow[] = [];
+  const failed: DefiScanFailure[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    const outcome = settled[i];
+    if (outcome.status === "fulfilled") {
+      rows.push(...outcome.value);
+      continue;
+    }
+    if (!isDegradable(outcome.reason)) throw outcome.reason;
+    const source = sources[i][0];
+    failed.push({ wallet, source });
+    console.warn(
+      `portfolio: defi source ${source} unavailable for ${wallet.slice(0, 4)}…: ${describeError(outcome.reason)}`,
+    );
   }
-  if (nft.unscannedNfts > 0) {
-    rows.push({
-      wallet,
-      protocol: "unknown",
-      type: "unscanned-nft",
-      mint: null,
-      symbol: null,
-      valueUsd: null,
-      count: nft.unscannedNfts,
-    });
-  }
-  return rows;
+  return { rows, failed };
 }
 
 export async function getDefiPositions(
   wallets: string[],
-): Promise<{ positions: DefiPositionRow[]; hasUnvalued: boolean }> {
+): Promise<DefiPositionsResult> {
   const perWallet = await mapLimit(wallets, WALLET_CONCURRENCY, (wallet) =>
-    defiCache.getOrFetch(wallet, () => scanWallet(wallet)),
+    defiCache.getOrFetch(
+      wallet,
+      () => scanWallet(wallet),
+      (scan) => (scan.failed.length > 0 ? 0 : undefined),
+    ),
   );
   const positions = perWallet
-    .flat()
+    .flatMap((s) => s.rows)
     .sort((a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1));
+  const failed = perWallet.flatMap((s) => s.failed);
   return {
     positions,
     hasUnvalued: positions.some((p) => p.valueUsd === null),
+    partial: failed.length > 0,
+    failed,
   };
 }

@@ -113,7 +113,7 @@ const PROVIDERS: TxProvider[] = [
   },
 ];
 
-function isAuthError(code: number | undefined, msg: string): boolean {
+export function isAuthError(code: number | undefined, msg: string): boolean {
   return code === -32401 || /invalid api key|unauthorized|forbidden/i.test(msg);
 }
 
