@@ -139,6 +139,18 @@ describe("fetchTransactions", () => {
     expect(heliusUrls[1]).toContain("before=a99");
   });
 
+  it("reports truncation when a full page has no usable final signature", async () => {
+    const page = fullPage("n", 900);
+    page[page.length - 1] = { timestamp: 1, type: "TRANSFER" } as never;
+    routes([
+      [isHelius, () => json(page)],
+      [isRpc, () => json(emptyAccounts)],
+    ]);
+    const result = await fetchTransactions(wallet());
+    expect(result.txs).toHaveLength(100);
+    expect(result.truncated).toBe(true);
+  });
+
   it("reports truncation when the page cap is reached", async () => {
     routes([
       [isHelius, () => json(fullPage("c", 500))],

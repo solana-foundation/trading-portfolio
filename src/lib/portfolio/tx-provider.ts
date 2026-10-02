@@ -170,10 +170,7 @@ async function fetchFromProvider(
       break;
     }
     before = page[page.length - 1]?.signature ?? null;
-    if (!before) {
-      truncated = false;
-      break;
-    }
+    if (!before) break;
   }
   return { txs: all, truncated };
 }
