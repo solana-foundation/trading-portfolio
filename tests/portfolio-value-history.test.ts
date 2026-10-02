@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireLockedClient,
-  runAfterInFlight,
+  joinOrQueue,
   seriesOrSkip,
   withTransaction,
 } from "@/lib/portfolio/value-history";
@@ -181,30 +181,41 @@ describe("seriesOrSkip", () => {
   });
 });
 
-describe("runAfterInFlight", () => {
-  it("runs a later caller after the in-flight one settles, with its own run", async () => {
-    const map = new Map<string, Promise<string>>();
+describe("joinOrQueue", () => {
+  it("shares an in-flight sync for the same day", async () => {
+    const map = new Map<string, { day: number; promise: Promise<string> }>();
+    const run = vi.fn(async () => "shared");
+    const a = joinOrQueue(map, "w", 1, run);
+    const b = joinOrQueue(map, "w", 1, run);
+    expect(a).toBe(b);
+    expect(await b).toBe("shared");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(map.size).toBe(0);
+  });
+
+  it("queues a different day behind the in-flight sync and runs it on its own", async () => {
+    const map = new Map<string, { day: number; promise: Promise<string> }>();
     let releaseFirst!: () => void;
-    const firstStarted = new Promise<void>((r) => {
+    const gate = new Promise<void>((r) => {
       releaseFirst = r;
     });
     const order: string[] = [];
-    const first = runAfterInFlight(map, "w", async () => {
-      order.push("first start");
-      await firstStarted;
-      order.push("first end");
-      throw new Error("first failed");
+    const first = joinOrQueue(map, "w", 1, async () => {
+      order.push("day1 start");
+      await gate;
+      order.push("day1 end");
+      throw new Error("day1 failed");
     });
-    const second = runAfterInFlight(map, "w", async () => {
-      order.push("second start");
-      return "second ok";
+    const second = joinOrQueue(map, "w", 2, async () => {
+      order.push("day2 start");
+      return "day2 ok";
     });
     await Promise.resolve();
-    expect(order).toEqual(["first start"]);
+    expect(order).toEqual(["day1 start"]);
     releaseFirst();
-    await expect(first).rejects.toThrow("first failed");
-    expect(await second).toBe("second ok");
-    expect(order).toEqual(["first start", "first end", "second start"]);
+    await expect(first).rejects.toThrow("day1 failed");
+    expect(await second).toBe("day2 ok");
+    expect(order).toEqual(["day1 start", "day1 end", "day2 start"]);
     expect(map.size).toBe(0);
   });
 });

@@ -4,6 +4,7 @@ import {
   getNetWorthHistory,
   getPriceSeries,
   getRawBalances,
+  isBirdeyeRefusal,
 } from "@/lib/portfolio/birdeye";
 import { mapLimit } from "@/lib/portfolio/concurrency";
 import {
@@ -159,6 +160,7 @@ async function pricesFor(
 
   const INSERT_CHUNK = 5000;
   let cutShort = false;
+  let refused = false;
   const series = await mapLimit(needFetch, PRICE_FETCH_CONCURRENCY, (mint) => {
     const pending = seriesOrSkip(
       mint,
@@ -166,9 +168,16 @@ async function pricesFor(
       toDay + DAY_SECONDS - 1,
       deadline,
     );
-    if (pending) return pending;
-    cutShort = true;
-    return Promise.resolve(new Map<number, number>());
+    if (!pending) {
+      cutShort = true;
+      return Promise.resolve(new Map<number, number>());
+    }
+    return pending.catch((e: unknown) => {
+      if (!isBirdeyeRefusal(e)) throw e;
+      refused = true;
+      console.warn(`portfolio: ${describeError(e)}`);
+      return new Map<number, number>();
+    });
   });
   const newRows: Array<[string, number, number]> = [];
   needFetch.forEach((mint, i) => {
@@ -196,7 +205,7 @@ async function pricesFor(
       params,
     );
   }
-  return { prices: result, cutShort };
+  return { prices: result, cutShort: cutShort || refused };
 }
 
 async function cleanupStale(): Promise<void> {
@@ -442,33 +451,40 @@ async function syncWalletExclusive(
   }
 }
 
-export function runAfterInFlight<T>(
-  inFlight: Map<string, Promise<T>>,
+type InFlight<T> = { day: number; promise: Promise<T> };
+
+export function joinOrQueue<T>(
+  inFlight: Map<string, InFlight<T>>,
   key: string,
+  day: number,
   run: () => Promise<T>,
 ): Promise<T> {
   const previous = inFlight.get(key);
+  if (previous && previous.day === day) return previous.promise;
   const settled = previous
-    ? previous.then(
+    ? previous.promise.then(
         () => undefined,
         () => undefined,
       )
     : Promise.resolve();
-  const p: Promise<T> = settled.then(run).finally(() => {
-    if (inFlight.get(key) === p) inFlight.delete(key);
-  });
-  inFlight.set(key, p);
-  return p;
+  const entry: InFlight<T> = {
+    day,
+    promise: settled.then(run).finally(() => {
+      if (inFlight.get(key) === entry) inFlight.delete(key);
+    }),
+  };
+  inFlight.set(key, entry);
+  return entry.promise;
 }
 
-const syncInFlight = new Map<string, Promise<SyncOutcome>>();
+const syncInFlight = new Map<string, InFlight<SyncOutcome>>();
 
 function syncWallet(
   wallet: string,
   todayDay: number,
   deadline: number,
 ): Promise<SyncOutcome> {
-  return runAfterInFlight(syncInFlight, wallet, () =>
+  return joinOrQueue(syncInFlight, wallet, todayDay, () =>
     syncWalletExclusive(wallet, todayDay, deadline),
   );
 }
