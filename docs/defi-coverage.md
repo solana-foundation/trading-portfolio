@@ -80,6 +80,9 @@ ignored, so new protocols become alerts instead of blind spots:
 - **Scan availability** — when the interaction scan cannot run (no
   `HELIUS_API_KEY`, vendor error, rate limit), the report emits
   `ALERT_UNKNOWN_SCAN_UNAVAILABLE` instead of silently looking clean.
+  The API mirrors this: `POST /api/portfolio/defi` lists any source that
+  failed for a wallet under `failed` and sets `partial: true`, and never
+  caches a wallet whose scan was incomplete.
 
 `DEFI_GAPS_STRICT=true` fails the run on any non-`NOTE_` row, and smoke.sh
 propagates that failure; without it the report is informational.

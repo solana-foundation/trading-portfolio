@@ -1,5 +1,13 @@
+import { z } from "zod";
 import { TtlCache } from "@/lib/portfolio/cache";
-import { fetchJSON } from "@/lib/portfolio/fetch-json";
+import { createLimiter, mapLimit } from "@/lib/portfolio/concurrency";
+import {
+  describeError,
+  ProviderAuthError,
+  VendorError,
+} from "@/lib/portfolio/errors";
+import { type FetchOptions, fetchJSON } from "@/lib/portfolio/fetch-json";
+import { MAX_WALLETS_PER_REQUEST } from "@/lib/portfolio/request";
 import { SOL_MINT } from "@/lib/portfolio/swaps";
 import type {
   HiddenReason,
@@ -17,6 +25,12 @@ const CANONICAL_MINTS: Record<string, string> = {
 };
 
 const DUST_THRESHOLD_USD = 0.01;
+const LOOKUP_CONCURRENCY = 8;
+const TOKEN_LIST_CONCURRENCY = 2 * MAX_WALLETS_PER_REQUEST;
+const TOKEN_LIST_ATTEMPT_TIMEOUT_MS = 20_000;
+const TOKEN_LIST_BUDGET_MS = 40_000;
+const NEGATIVE_TTL_MS = 30 * 60 * 1000;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 type TokenListItem = {
   symbol?: string;
@@ -27,33 +41,163 @@ type TokenListItem = {
   address: string;
 };
 
+export type TokenMeta = { symbol: string; icon?: string };
+
+const lookupGate = createLimiter(LOOKUP_CONCURRENCY);
+const tokenListGate = createLimiter(TOKEN_LIST_CONCURRENCY);
 const tokenListCache = new TtlCache<TokenListItem[]>(1_000, 2 * 60 * 1000);
-const histPriceCache = new TtlCache<number>(10_000, 7 * 24 * 60 * 60 * 1000);
-const tokenMetaCache = new TtlCache<{ symbol: string; icon?: string }>(
-  5_000,
-  7 * 24 * 60 * 60 * 1000,
-);
+const histPriceCache = new TtlCache<number | null>(10_000, WEEK_MS);
+const tokenMetaCache = new TtlCache<TokenMeta | null>(5_000, WEEK_MS);
+
+function negativeTtl<V>(value: V): number | undefined {
+  return value === null ? NEGATIVE_TTL_MS : undefined;
+}
 
 function birdeyeHeaders(): Record<string, string> {
   const apiKey = process.env.BIRDEYE_API_KEY;
-  if (!apiKey) throw new Error("BIRDEYE_API_KEY is not set");
+  if (!apiKey) {
+    throw new VendorError({
+      vendor: "birdeye",
+      kind: "config",
+      path: "env",
+      message: "BIRDEYE_API_KEY is not set",
+    });
+  }
   return { "x-chain": "solana", "X-API-KEY": apiKey };
 }
 
-type BirdeyeHoldingsResp = {
-  data?: { items?: TokenListItem[] };
-};
+function birdeyeFetch<S extends z.ZodType>(
+  url: string,
+  schema: S,
+  overrides: Partial<
+    Pick<FetchOptions<S>, "attemptTimeoutMs" | "budgetMs" | "gate">
+  > = {},
+): Promise<z.output<S>> {
+  return fetchJSON(url, {
+    vendor: "birdeye",
+    schema,
+    init: { headers: birdeyeHeaders() },
+    gate: lookupGate,
+    ...overrides,
+  });
+}
 
-async function getTokenList(wallet: string): Promise<TokenListItem[]> {
-  const cached = tokenListCache.get(wallet);
-  if (cached) return cached;
-  const data = await fetchJSON<BirdeyeHoldingsResp>(
-    `https://public-api.birdeye.so/v1/wallet/token_list?wallet=${wallet}`,
-    { headers: birdeyeHeaders() },
+const tokenListSchema = z.looseObject({
+  success: z.boolean().nullish(),
+  message: z.string().nullish(),
+  data: z
+    .looseObject({
+      items: z.array(
+        z.looseObject({
+          address: z.string(),
+          symbol: z.string().nullish(),
+          name: z.string().nullish(),
+          uiAmount: z.number().nullish(),
+          priceUsd: z.number().nullish(),
+          logoURI: z.string().nullish(),
+        }),
+      ),
+    })
+    .nullish(),
+});
+
+const historicalPriceSchema = z.looseObject({
+  success: z.boolean().nullish(),
+  message: z.string().nullish(),
+  data: z.looseObject({ value: z.number().nullish() }).nullish(),
+});
+
+const priceSeriesSchema = z.looseObject({
+  success: z.boolean().nullish(),
+  message: z.string().nullish(),
+  data: z
+    .looseObject({
+      items: z.array(
+        z.looseObject({
+          unixTime: z.number().nullish(),
+          value: z.number().nullish(),
+        }),
+      ),
+    })
+    .nullish(),
+});
+
+const netWorthSchema = z.looseObject({
+  success: z.boolean().nullish(),
+  message: z.string().nullish(),
+  data: z
+    .looseObject({
+      history: z
+        .array(
+          z.looseObject({
+            timestamp: z.string().nullish(),
+            net_worth: z.number().nullish(),
+          }),
+        )
+        .nullable(),
+    })
+    .nullish(),
+});
+
+function missingCollection(path: string, field: string): VendorError {
+  return new VendorError({
+    vendor: "birdeye",
+    kind: "shape",
+    path,
+    message: `unexpected response shape for ${path} (data.${field} missing)`,
+  });
+}
+
+function refusal(
+  path: string,
+  what: string,
+  message: string | null | undefined,
+): VendorError {
+  return new VendorError({
+    vendor: "birdeye",
+    kind: "api",
+    path,
+    message: `Birdeye did not report success for ${what}${message ? `: ${message}` : ""}`,
+  });
+}
+
+const tokenMetaSchema = z.looseObject({
+  success: z.boolean().nullish(),
+  data: z
+    .looseObject({
+      symbol: z.string().nullish(),
+      logo_uri: z.string().nullish(),
+    })
+    .nullish(),
+});
+
+function getTokenList(wallet: string): Promise<TokenListItem[]> {
+  return tokenListCache.getOrFetch(wallet, () => fetchTokenList(wallet));
+}
+
+async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
+  const path = "/v1/wallet/token_list";
+  const data = await birdeyeFetch(
+    `https://public-api.birdeye.so${path}?wallet=${wallet}`,
+    tokenListSchema,
+    {
+      attemptTimeoutMs: TOKEN_LIST_ATTEMPT_TIMEOUT_MS,
+      budgetMs: TOKEN_LIST_BUDGET_MS,
+      gate: tokenListGate,
+    },
   );
-  const items = data.data?.items || [];
-  tokenListCache.set(wallet, items);
-  return items;
+  if (data.success !== true) {
+    throw refusal(path, `token list of ${wallet.slice(0, 4)}…`, data.message);
+  }
+  if (!data.data) throw missingCollection(path, "items");
+  return data.data.items.map((t) => ({
+    address: t.address,
+    symbol: t.symbol ?? undefined,
+    name: t.name ?? undefined,
+    uiAmount: t.uiAmount ?? undefined,
+    priceUsd: t.priceUsd ?? undefined,
+    logoURI: t.logoURI ?? undefined,
+  }));
 }
 
 export async function getRawBalances(
@@ -111,70 +255,147 @@ export function classifyHolding(
   return undefined;
 }
 
+function floorDayTs(unixTs: number): number {
+  return Math.floor(unixTs / 86_400) * 86_400;
+}
+
+async function fetchHistoricalPrice(
+  mint: string,
+  dayTs: number,
+): Promise<number | null> {
+  const path = "/defi/historical_price_unix";
+  const data = await birdeyeFetch(
+    `https://public-api.birdeye.so${path}?address=${mint}&unixtime=${dayTs}`,
+    historicalPriceSchema,
+  );
+  if (data.success !== true) {
+    const detail =
+      data.success === false
+        ? `reported failure${data.message ? `: ${data.message}` : ""}`
+        : "answered without a success flag";
+    throw new VendorError({
+      vendor: "birdeye",
+      kind: "api",
+      path,
+      message: `Birdeye ${detail} for ${mint.slice(0, 4)}…@${dayTs}`,
+    });
+  }
+  return typeof data.data?.value === "number" ? data.data.value : null;
+}
+
+export function isBirdeyeRefusal(e: unknown): e is VendorError {
+  return e instanceof VendorError && e.vendor === "birdeye" && e.kind === "api";
+}
+
+export type VendorCounters = { refused: number };
+
 export async function getHistoricalPrice(
   mint: string,
   unixTs: number,
+  counters?: VendorCounters,
 ): Promise<number | null> {
   if (!unixTs || unixTs <= 0) return null;
-  const dayTs = Math.floor(unixTs / 86400) * 86400;
-  const key = `${mint}:${dayTs}`;
-  const cached = histPriceCache.get(key);
-  if (cached !== undefined) return cached;
+  const dayTs = floorDayTs(unixTs);
   try {
-    type Resp = { success?: boolean; data?: { value?: number } };
-    const data = await fetchJSON<Resp>(
-      `https://public-api.birdeye.so/defi/historical_price_unix?address=${mint}&unixtime=${dayTs}`,
-      { headers: birdeyeHeaders() },
+    return await histPriceCache.getOrFetch(
+      `${mint}:${dayTs}`,
+      () => fetchHistoricalPrice(mint, dayTs),
+      negativeTtl,
     );
-    if (data?.success && typeof data.data?.value === "number") {
-      const price = data.data.value;
-      histPriceCache.set(key, price);
-      return price;
-    }
-    return null;
   } catch (e) {
-    console.error(
-      `portfolio: Birdeye historical price failed for ${mint.slice(0, 4)}…@${dayTs}: ${(e as Error).message}`,
-    );
+    if (!isBirdeyeRefusal(e)) throw e;
+    if (counters) counters.refused += 1;
+    console.warn(`portfolio: ${describeError(e)}`);
     return null;
   }
 }
 
+export async function getHistoricalPrices(
+  queries: ReadonlyArray<{ mint: string; ts: number }>,
+  counters?: VendorCounters,
+): Promise<Map<string, number | null>> {
+  const unique = new Map<string, { mint: string; dayTs: number }>();
+  for (const q of queries) {
+    if (!q.ts || q.ts <= 0) continue;
+    const dayTs = floorDayTs(q.ts);
+    unique.set(`${q.mint}:${dayTs}`, { mint: q.mint, dayTs });
+  }
+  const entries = Array.from(unique.entries());
+  const prices = await mapLimit(entries, LOOKUP_CONCURRENCY, ([, q]) =>
+    getHistoricalPrice(q.mint, q.dayTs, counters),
+  );
+  const out = new Map<string, number | null>();
+  for (let i = 0; i < entries.length; i++) out.set(entries[i][0], prices[i]);
+  return out;
+}
+
 const SERIES_CHUNK_DAYS = 800;
+const SERIES_BUDGET_MS = 40_000;
+const DEADLINE_SLACK_MS = 50;
+
+export type PriceSeries = { series: Map<number, number>; complete: boolean };
+
+async function collectPriceSeries(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+  deadline?: number,
+): Promise<PriceSeries> {
+  const series = new Map<number, number>();
+  const path = "/defi/history_price";
+  for (let from = fromTs; from <= toTs; from += SERIES_CHUNK_DAYS * 86_400) {
+    const to = Math.min(from + SERIES_CHUNK_DAYS * 86_400 - 1, toTs);
+    const remaining =
+      deadline === undefined ? SERIES_BUDGET_MS : deadline - Date.now();
+    if (remaining <= 0) return { series, complete: false };
+    let data: z.output<typeof priceSeriesSchema>;
+    try {
+      data = await birdeyeFetch(
+        `https://public-api.birdeye.so${path}?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
+        priceSeriesSchema,
+        { budgetMs: Math.min(SERIES_BUDGET_MS, remaining) },
+      );
+    } catch (e) {
+      const cutByDeadline =
+        deadline !== undefined &&
+        e instanceof VendorError &&
+        e.kind === "timeout" &&
+        Date.now() >= deadline - DEADLINE_SLACK_MS;
+      if (cutByDeadline) return { series, complete: false };
+      throw e;
+    }
+    if (data.success !== true) {
+      throw refusal(path, `price series of ${mint.slice(0, 4)}…`, data.message);
+    }
+    if (!data.data) throw missingCollection(path, "items");
+    for (const item of data.data.items) {
+      if (
+        typeof item.unixTime === "number" &&
+        typeof item.value === "number" &&
+        item.value > 0
+      ) {
+        series.set(floorDayTs(item.unixTime), item.value);
+      }
+    }
+  }
+  return { series, complete: true };
+}
 
 export async function getPriceSeries(
   mint: string,
   fromTs: number,
   toTs: number,
 ): Promise<Map<number, number>> {
-  const out = new Map<number, number>();
-  type Resp = {
-    success?: boolean;
-    data?: { items?: Array<{ unixTime?: number; value?: number }> };
-  };
-  for (let from = fromTs; from <= toTs; from += SERIES_CHUNK_DAYS * 86_400) {
-    const to = Math.min(from + SERIES_CHUNK_DAYS * 86_400 - 1, toTs);
-    try {
-      const data = await fetchJSON<Resp>(
-        `https://public-api.birdeye.so/defi/history_price?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
-        { headers: birdeyeHeaders() },
-      );
-      for (const item of data?.data?.items || []) {
-        if (
-          typeof item.unixTime === "number" &&
-          typeof item.value === "number" &&
-          item.value > 0
-        ) {
-          out.set(Math.floor(item.unixTime / 86_400) * 86_400, item.value);
-        }
-      }
-    } catch (e) {
-      console.error(
-        `portfolio: Birdeye price series failed for ${mint.slice(0, 4)}…: ${(e as Error).message}`,
-      );
-    }
-  }
-  return out;
+  return (await collectPriceSeries(mint, fromTs, toTs)).series;
+}
+
+export function getPriceSeriesUntil(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+  deadline: number,
+): Promise<PriceSeries> {
+  return collectPriceSeries(mint, fromTs, toTs, deadline);
 }
 
 const NET_WORTH_MAX_DAYS = 90;
@@ -183,57 +404,77 @@ export async function getNetWorthHistory(
   wallet: string,
 ): Promise<Map<number, number>> {
   const out = new Map<number, number>();
-  type Resp = {
-    data?: {
-      history?: Array<{ timestamp?: string; net_worth?: number }>;
-    };
-  };
-  try {
-    const data = await fetchJSON<Resp>(
-      `https://public-api.birdeye.so/wallet/v2/net-worth?wallet=${wallet}&count=${NET_WORTH_MAX_DAYS}&direction=back&type=1d`,
-      { headers: birdeyeHeaders() },
-    );
-    const today = Math.floor(Date.now() / 1000 / 86_400) * 86_400;
-    for (const row of data?.data?.history || []) {
-      if (!row.timestamp || typeof row.net_worth !== "number") continue;
-      const ts = Math.floor(Date.parse(row.timestamp) / 1000);
-      if (!Number.isFinite(ts)) continue;
-      const day = Math.floor(ts / 86_400) * 86_400;
-      if (day >= today) continue;
-      if (!out.has(day)) out.set(day, row.net_worth);
-    }
-  } catch (e) {
-    console.error(
-      `portfolio: Birdeye net-worth history failed for ${wallet.slice(0, 4)}…: ${(e as Error).message}`,
-    );
+  const path = "/wallet/v2/net-worth";
+  const data = await birdeyeFetch(
+    `https://public-api.birdeye.so${path}?wallet=${wallet}&count=${NET_WORTH_MAX_DAYS}&direction=back&type=1d`,
+    netWorthSchema,
+  );
+  if (data.success !== true) {
+    throw refusal(path, `net worth of ${wallet.slice(0, 4)}…`, data.message);
+  }
+  if (!data.data) throw missingCollection(path, "history");
+  const today = floorDayTs(Math.floor(Date.now() / 1000));
+  for (const row of data.data.history ?? []) {
+    if (!row.timestamp || typeof row.net_worth !== "number") continue;
+    const ts = Math.floor(Date.parse(row.timestamp) / 1000);
+    if (!Number.isFinite(ts)) continue;
+    const day = floorDayTs(ts);
+    if (day >= today) continue;
+    if (!out.has(day)) out.set(day, row.net_worth);
   }
   return out;
 }
 
-export async function getTokenMeta(
-  mint: string,
-): Promise<{ symbol: string; icon?: string } | null> {
-  const cached = tokenMetaCache.get(mint);
-  if (cached) return cached;
-  try {
-    type Resp = {
-      success?: boolean;
-      data?: { symbol?: string; logo_uri?: string };
+async function fetchTokenMeta(mint: string): Promise<TokenMeta | null> {
+  const data = await birdeyeFetch(
+    `https://public-api.birdeye.so/defi/v3/token/meta-data/single?address=${mint}`,
+    tokenMetaSchema,
+  );
+  if (data.success !== true) {
+    throw new VendorError({
+      vendor: "birdeye",
+      kind: "api",
+      path: "/defi/v3/token/meta-data/single",
+      message: `Birdeye ${data.success === false ? "reported failure" : "answered without a success flag"} for metadata of ${mint.slice(0, 4)}…`,
+    });
+  }
+  if (data.data?.symbol) {
+    return {
+      symbol: data.data.symbol,
+      ...(data.data.logo_uri ? { icon: data.data.logo_uri } : {}),
     };
-    const data = await fetchJSON<Resp>(
-      `https://public-api.birdeye.so/defi/v3/token/meta-data/single?address=${mint}`,
-      { headers: birdeyeHeaders() },
+  }
+  return null;
+}
+
+export async function getTokenMeta(mint: string): Promise<TokenMeta | null> {
+  try {
+    return await tokenMetaCache.getOrFetch(
+      mint,
+      () => fetchTokenMeta(mint),
+      negativeTtl,
     );
-    if (data?.success && data.data?.symbol) {
-      const meta: { symbol: string; icon?: string } = {
-        symbol: data.data.symbol,
-        ...(data.data.logo_uri ? { icon: data.data.logo_uri } : {}),
-      };
-      tokenMetaCache.set(mint, meta);
-      return meta;
-    }
-    return null;
-  } catch {
+  } catch (e) {
+    if (e instanceof ProviderAuthError) throw e;
+    if (e instanceof VendorError && e.kind === "config") throw e;
+    console.warn(
+      `portfolio: Birdeye token meta unavailable for ${mint.slice(0, 4)}…: ${describeError(e)}`,
+    );
     return null;
   }
+}
+
+export async function getTokenMetas(
+  mints: ReadonlyArray<string>,
+): Promise<Map<string, TokenMeta>> {
+  const unique = Array.from(new Set(mints));
+  const metas = await mapLimit(unique, LOOKUP_CONCURRENCY, (mint) =>
+    getTokenMeta(mint),
+  );
+  const out = new Map<string, TokenMeta>();
+  unique.forEach((mint, i) => {
+    const meta = metas[i];
+    if (meta) out.set(mint, meta);
+  });
+  return out;
 }

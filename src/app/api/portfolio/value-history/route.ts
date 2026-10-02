@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { dbConfigured } from "@/lib/portfolio/db";
+import { requestBudget } from "@/lib/portfolio/deadline";
+import { mapError } from "@/lib/portfolio/errors";
 import { parseWalletsBody } from "@/lib/portfolio/request";
-import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 import { getValueHistory } from "@/lib/portfolio/value-history";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const REQUEST_BUDGET_MS = 110_000;
+
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
@@ -23,20 +26,14 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const result = await getValueHistory(parsed.wallets);
+    const within = requestBudget(REQUEST_BUDGET_MS, "value-history");
+    const result = await within(getValueHistory(parsed.wallets));
     return NextResponse.json(result);
   } catch (e) {
-    if (e instanceof ProviderAuthError) {
-      console.error("portfolio: provider auth failed:", e.message);
-      return NextResponse.json(
-        { error: "Upstream data provider unavailable." },
-        { status: 502 },
-      );
-    }
-    console.error("portfolio: value-history failed:", (e as Error).message);
+    const mapped = mapError(e, "Failed to load value history.");
     return NextResponse.json(
-      { error: "Failed to load value history." },
-      { status: 502 },
+      { error: mapped.error },
+      { status: mapped.status },
     );
   }
 }

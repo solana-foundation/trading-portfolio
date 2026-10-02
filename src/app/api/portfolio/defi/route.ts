@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
+import { requestBudget } from "@/lib/portfolio/deadline";
 import { getDefiPositions } from "@/lib/portfolio/defi";
+import { mapError } from "@/lib/portfolio/errors";
 import { parseWalletsBody } from "@/lib/portfolio/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const REQUEST_BUDGET_MS = 110_000;
+
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
@@ -14,14 +18,15 @@ export async function POST(request: Request) {
       { status: parsed.status },
     );
   }
+  const within = requestBudget(REQUEST_BUDGET_MS, "defi");
   try {
-    const result = await getDefiPositions(parsed.wallets);
+    const result = await within(getDefiPositions(parsed.wallets));
     return NextResponse.json(result);
   } catch (e) {
-    console.error("portfolio: defi failed:", (e as Error).message);
+    const mapped = mapError(e, "Failed to load DeFi positions.");
     return NextResponse.json(
-      { error: "Failed to load DeFi positions." },
-      { status: 502 },
+      { error: mapped.error },
+      { status: mapped.status },
     );
   }
 }
