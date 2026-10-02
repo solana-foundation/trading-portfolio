@@ -23,6 +23,7 @@ const STALE_AFTER_DAYS = 90;
 const LOCK_POLL_MS = 500;
 const REQUEST_DEADLINE_MS = 100_000;
 const SYNC_RESERVE_MS = 20_000;
+const WRITE_RESERVE_MS = 15_000;
 const MAX_PRICED_MINTS = 1000;
 const PRICE_FETCH_CONCURRENCY = 8;
 const VENDOR_WINDOW_DAYS = 90;
@@ -317,7 +318,7 @@ async function syncWalletLocked(
         Array.from(priced),
         fromDay,
         toDay,
-        deadline,
+        deadline - WRITE_RESERVE_MS,
       );
       if (cutShort) partial = true;
 
