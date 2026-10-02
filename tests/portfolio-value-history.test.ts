@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acquireWalletLock,
+  acquireLockedClient,
   withTransaction,
 } from "@/lib/portfolio/value-history";
 
@@ -54,7 +54,31 @@ describe("withTransaction", () => {
   });
 });
 
-describe("acquireWalletLock", () => {
+function fakePool(lockedSequence: boolean[], failOnQuery = false) {
+  const clients: Array<{
+    query: ReturnType<typeof vi.fn>;
+    release: ReturnType<typeof vi.fn>;
+  }> = [];
+  let i = 0;
+  const pool = {
+    connect: vi.fn(async () => {
+      const locked = lockedSequence[i] ?? false;
+      i += 1;
+      const client = {
+        query: vi.fn(async () => {
+          if (failOnQuery) throw new Error("db down");
+          return { rows: [{ locked }] };
+        }),
+        release: vi.fn(),
+      };
+      clients.push(client);
+      return client;
+    }),
+  };
+  return { pool, clients };
+}
+
+describe("acquireLockedClient", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -62,28 +86,40 @@ describe("acquireWalletLock", () => {
     vi.useRealTimers();
   });
 
-  it("polls the try-lock until it is granted", async () => {
-    const query = vi
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ locked: false }] })
-      .mockResolvedValueOnce({ rows: [{ locked: false }] })
-      .mockResolvedValueOnce({ rows: [{ locked: true }] });
-    const p = acquireWalletLock({ query } as never, "wallet", 10_000);
+  it("returns a pooled connection between polls and keeps the one that got the lock", async () => {
+    const { pool, clients } = fakePool([false, false, true]);
+    const p = acquireLockedClient(pool as never, "wallet", Date.now() + 10_000);
     await vi.runAllTimersAsync();
-    await p;
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(String(query.mock.calls[0][0])).toContain("pg_try_advisory_lock");
+    const client = await p;
+    expect(pool.connect).toHaveBeenCalledTimes(3);
+    expect(clients[0].release).toHaveBeenCalledWith();
+    expect(clients[1].release).toHaveBeenCalledWith();
+    expect(clients[2].release).not.toHaveBeenCalled();
+    expect(client).toBe(clients[2]);
+    expect(String(clients[2].query.mock.calls[0][0])).toContain(
+      "pg_try_advisory_lock",
+    );
   });
 
-  it("gives up after the deadline", async () => {
-    const query = vi.fn().mockResolvedValue({ rows: [{ locked: false }] });
-    const p = acquireWalletLock({ query } as never, "wallet", 1_200).catch(
-      (e) => e,
-    );
+  it("gives up at the deadline with every connection returned", async () => {
+    const { pool, clients } = fakePool([false, false, false, false]);
+    const p = acquireLockedClient(
+      pool as never,
+      "wallet",
+      Date.now() + 1_200,
+    ).catch((e) => e);
     await vi.runAllTimersAsync();
     const err = await p;
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain("waiting for the sync lock");
-    expect(query.mock.calls.length).toBeGreaterThanOrEqual(3);
+    for (const c of clients) expect(c.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("destroys the connection and rethrows when the lock query fails", async () => {
+    const { pool, clients } = fakePool([true], true);
+    await expect(
+      acquireLockedClient(pool as never, "wallet", Date.now() + 10_000),
+    ).rejects.toThrow("db down");
+    expect(clients[0].release).toHaveBeenCalledWith(true);
   });
 });

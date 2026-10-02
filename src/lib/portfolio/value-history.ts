@@ -17,8 +17,9 @@ import { SOL_MINT, STABLECOIN_MINTS } from "@/lib/portfolio/swaps";
 import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 
 const STALE_AFTER_DAYS = 90;
-const LOCK_WAIT_MS = 100_000;
 const LOCK_POLL_MS = 500;
+const REQUEST_DEADLINE_MS = 100_000;
+const SYNC_RESERVE_MS = 20_000;
 const MAX_PRICED_MINTS = 1000;
 const PRICE_FETCH_CONCURRENCY = 8;
 const VENDOR_WINDOW_DAYS = 90;
@@ -44,21 +45,31 @@ function isoDay(day: number): string {
   return new Date(day * 1000).toISOString().slice(0, 10);
 }
 
-export async function acquireWalletLock(
-  client: Pick<PoolClient, "query">,
+type LockPool = { connect: () => Promise<PoolClient> };
+
+export async function acquireLockedClient(
+  pool: LockPool,
   wallet: string,
-  waitMs = LOCK_WAIT_MS,
-): Promise<void> {
-  const deadline = Date.now() + waitMs;
+  deadline: number,
+): Promise<PoolClient> {
   for (;;) {
-    const r = await client.query(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-      [wallet],
-    );
-    if (r.rows[0]?.locked === true) return;
+    const client = await pool.connect();
+    let locked = false;
+    try {
+      const r = await client.query(
+        "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+        [wallet],
+      );
+      locked = r.rows[0]?.locked === true;
+    } catch (e) {
+      client.release(true);
+      throw e;
+    }
+    if (locked) return client;
+    client.release();
     if (Date.now() >= deadline) {
       throw new Error(
-        `timed out after ${waitMs}ms waiting for the sync lock on ${wallet.slice(0, 4)}…`,
+        `gave up waiting for the sync lock on ${wallet.slice(0, 4)}… before the request deadline`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
@@ -373,33 +384,37 @@ async function syncWalletLocked(
 async function syncWalletExclusive(
   wallet: string,
   todayDay: number,
+  deadline: number,
 ): Promise<SyncOutcome> {
-  const pool = getPool();
-  const client = await pool.connect();
+  const client = await acquireLockedClient(
+    getPool(),
+    wallet,
+    deadline - SYNC_RESERVE_MS,
+  );
   let lockStateUnknown = false;
   try {
-    await acquireWalletLock(client, wallet);
-    try {
-      return await syncWalletLocked(client, wallet, todayDay);
-    } finally {
-      await client
-        .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
-        .catch(() => {
-          lockStateUnknown = true;
-        });
-    }
+    return await syncWalletLocked(client, wallet, todayDay);
   } finally {
+    await client
+      .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
+      .catch(() => {
+        lockStateUnknown = true;
+      });
     client.release(lockStateUnknown);
   }
 }
 
 const syncInFlight = new Map<string, Promise<SyncOutcome>>();
 
-function syncWallet(wallet: string, todayDay: number): Promise<SyncOutcome> {
+function syncWallet(
+  wallet: string,
+  todayDay: number,
+  deadline: number,
+): Promise<SyncOutcome> {
   const key = `${wallet}:${todayDay}`;
   const inFlight = syncInFlight.get(key);
   if (inFlight) return inFlight;
-  const p = syncWalletExclusive(wallet, todayDay).finally(() =>
+  const p = syncWalletExclusive(wallet, todayDay, deadline).finally(() =>
     syncInFlight.delete(key),
   );
   syncInFlight.set(key, p);
@@ -410,6 +425,7 @@ export async function getValueHistory(
   wallets: string[],
 ): Promise<ValueHistoryResult> {
   const todayDay = floorDay(Math.floor(Date.now() / 1000));
+  const deadline = Date.now() + REQUEST_DEADLINE_MS;
   const pool = getPool();
 
   const metas: Record<string, WalletSeriesMeta> = {};
@@ -417,7 +433,7 @@ export async function getValueHistory(
   let hasUnpricedDays = false;
   let todayValueUsd = 0;
   for (const wallet of wallets) {
-    const r = await syncWallet(wallet, todayDay);
+    const r = await syncWallet(wallet, todayDay, deadline);
     metas[wallet] = r.meta;
     partial = partial || r.partial || r.meta.truncated;
     hasUnpricedDays = hasUnpricedDays || r.meta.incompleteDays > 0;
