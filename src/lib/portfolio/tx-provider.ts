@@ -1,4 +1,5 @@
 import { TtlCache } from "@/lib/portfolio/cache";
+import { mapLimit } from "@/lib/portfolio/concurrency";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 
@@ -178,30 +179,13 @@ async function getTokenAccounts(wallet: string): Promise<string[]> {
   return out;
 }
 
-async function fetchAddressesBounded(
+function fetchAddressesBounded(
   addresses: string[],
   maxPages: number,
 ): Promise<TxFetchResult[]> {
-  const results: TxFetchResult[] = new Array(addresses.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (next < addresses.length) {
-      const i = next++;
-      try {
-        results[i] = await fetchForAddress(addresses[i], maxPages);
-      } catch (e) {
-        if (e instanceof ProviderAuthError) throw e;
-        results[i] = await fetchForAddress(addresses[i], maxPages);
-      }
-    }
-  }
-  await Promise.all(
-    Array.from(
-      { length: Math.min(ACCOUNT_FETCH_CONCURRENCY, addresses.length) },
-      () => worker(),
-    ),
+  return mapLimit(addresses, ACCOUNT_FETCH_CONCURRENCY, (address) =>
+    fetchForAddress(address, maxPages),
   );
-  return results;
 }
 
 export async function fetchTransactions(

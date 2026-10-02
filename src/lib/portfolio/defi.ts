@@ -1,5 +1,6 @@
 import { getTokenMeta } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
+import { mapLimit } from "@/lib/portfolio/concurrency";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
 import type { DefiPositionRow } from "@/lib/portfolio/types";
 
@@ -121,24 +122,6 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
 }
 
 type ProgramAccount = { pubkey: string; account: { data: [string, string] } };
-
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        results[i] = await fn(items[i]);
-      }
-    }),
-  );
-  return results;
-}
 
 const reserveMintCache = new TtlCache<string>(2_000, 24 * 60 * 60 * 1000);
 

@@ -5,6 +5,7 @@ import {
   getPriceSeries,
   getRawBalances,
 } from "@/lib/portfolio/birdeye";
+import { mapLimit } from "@/lib/portfolio/concurrency";
 import {
   DAY_SECONDS,
   floorDay,
@@ -81,57 +82,34 @@ async function pricesFor(
   }
 
   const INSERT_CHUNK = 5000;
-  const FETCH_WAVE = 32;
-  for (let w = 0; w < needFetch.length; w += FETCH_WAVE) {
-    const wave = needFetch.slice(w, w + FETCH_WAVE);
-    const seriesByMint = new Map<
-      string,
-      Awaited<ReturnType<typeof getPriceSeries>>
-    >();
-    let next = 0;
-    async function fetchWorker(): Promise<void> {
-      while (next < wave.length) {
-        const mint = wave[next++];
-        seriesByMint.set(
-          mint,
-          await getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1),
-        );
-      }
+  const series = await mapLimit(needFetch, PRICE_FETCH_CONCURRENCY, (mint) =>
+    getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1),
+  );
+  const newRows: Array<[string, number, number]> = [];
+  needFetch.forEach((mint, i) => {
+    const known = result.get(mint);
+    if (!known) return;
+    for (const [d, p] of series[i]) {
+      if (known.has(d) || d < fromDay || d > toDay) continue;
+      known.set(d, p);
+      newRows.push([mint, d, p]);
     }
-    await Promise.all(
-      Array.from(
-        { length: Math.min(PRICE_FETCH_CONCURRENCY, wave.length) },
-        () => fetchWorker(),
-      ),
-    );
-
-    const newRows: Array<[string, number, number]> = [];
-    for (const mint of wave) {
-      const known = result.get(mint);
-      const fetched = seriesByMint.get(mint);
-      if (!known || !fetched) continue;
-      for (const [d, p] of fetched) {
-        if (known.has(d) || d < fromDay || d > toDay) continue;
-        known.set(d, p);
-        newRows.push([mint, d, p]);
-      }
-    }
-    for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
-      const chunk = newRows.slice(start, start + INSERT_CHUNK);
-      const values: string[] = [];
-      const params: unknown[] = [];
-      for (const [mint, d, p] of chunk) {
-        params.push(mint, d, p);
-        values.push(
-          `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
-        );
-      }
-      await client.query(
-        `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
-         ON CONFLICT (mint, day) DO NOTHING`,
-        params,
+  });
+  for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
+    const chunk = newRows.slice(start, start + INSERT_CHUNK);
+    const values: string[] = [];
+    const params: unknown[] = [];
+    for (const [mint, d, p] of chunk) {
+      params.push(mint, d, p);
+      values.push(
+        `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
       );
     }
+    await client.query(
+      `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
+       ON CONFLICT (mint, day) DO NOTHING`,
+      params,
+    );
   }
   return result;
 }
