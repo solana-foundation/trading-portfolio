@@ -1,5 +1,15 @@
+import { VendorError } from "@/lib/portfolio/errors";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 import { parseAmount, SOL_MINT } from "@/lib/portfolio/swaps";
+
+function malformedAmount(tx: HeliusTx, field: string): VendorError {
+  return new VendorError({
+    vendor: "helius",
+    kind: "shape",
+    path: "/v0/addresses",
+    message: `malformed ${field} in transaction ${tx.signature?.slice(0, 8) ?? "?"}…`,
+  });
+}
 
 export const DAY_SECONDS = 86_400;
 
@@ -19,7 +29,8 @@ function undoTx(
 ): void {
   for (const tt of tx.tokenTransfers || []) {
     if (!tt.mint) continue;
-    const amount = parseAmount(tt.tokenAmount) ?? 0;
+    const amount = parseAmount(tt.tokenAmount);
+    if (amount === null) throw malformedAmount(tx, "tokenAmount");
     if (amount <= 0) continue;
     if (tt.toUserAccount === wallet) {
       balances.set(tt.mint, (balances.get(tt.mint) || 0) - amount);
@@ -29,7 +40,9 @@ function undoTx(
     }
   }
   for (const nt of tx.nativeTransfers || []) {
-    const sol = (parseAmount(nt.amount) ?? 0) / 1e9;
+    const lamports = parseAmount(nt.amount);
+    if (lamports === null) throw malformedAmount(tx, "amount");
+    const sol = lamports / 1e9;
     if (sol <= 0) continue;
     if (nt.toUserAccount === wallet) {
       balances.set(SOL_MINT, (balances.get(SOL_MINT) || 0) - sol);

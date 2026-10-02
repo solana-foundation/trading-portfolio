@@ -3,6 +3,7 @@ import {
   DAY_SECONDS,
   reconstructDailyBalances,
 } from "@/lib/portfolio/daily-balances";
+import { VendorError } from "@/lib/portfolio/errors";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 import { SOL_MINT } from "@/lib/portfolio/swaps";
 
@@ -104,5 +105,30 @@ describe("reconstructDailyBalances", () => {
     ];
     const days = reconstructDailyBalances(W, new Map([[MINT, 3]]), txs, TODAY);
     expect(days[0].balances.get(MINT)).toBe(3);
+  });
+});
+
+describe("malformed amounts", () => {
+  it("fails closed instead of reconstructing balances from a malformed amount", async () => {
+    const { reconstructDailyBalances } = await import(
+      "@/lib/portfolio/daily-balances"
+    );
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    const txs = [
+      {
+        signature: "bad",
+        timestamp: 1_700_000_000,
+        tokenTransfers: [
+          {
+            toUserAccount: WALLET,
+            mint: "MintDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+            tokenAmount: "10garbage",
+          },
+        ],
+      },
+    ];
+    expect(() =>
+      reconstructDailyBalances(WALLET, new Map(), txs, 1_700_100_000),
+    ).toThrow(VendorError);
   });
 });
