@@ -129,3 +129,47 @@ describe("malformed amounts", () => {
     ).toThrow(VendorError);
   });
 });
+
+describe("malformed amounts, edge cases", () => {
+  it("ignores a malformed transfer that does not involve the wallet", () => {
+    const txs: HeliusTx[] = [
+      tx({
+        signature: "other",
+        timestamp: TODAY - 3 * DAY_SECONDS + 100,
+        tokenTransfers: [
+          {
+            fromUserAccount: OTHER,
+            toUserAccount: "walletC",
+            mint: MINT,
+            tokenAmount: "10garbage",
+          },
+          { toUserAccount: W, mint: MINT, tokenAmount: "2" },
+        ],
+      }),
+      tx({
+        signature: "older",
+        timestamp: TODAY - 5 * DAY_SECONDS + 100,
+        tokenTransfers: [{ toUserAccount: W, mint: MINT, tokenAmount: "1" }],
+      }),
+    ];
+    const days = reconstructDailyBalances(W, new Map([[MINT, 6]]), txs, TODAY);
+    expect(days.length).toBe(5);
+    expect(days[days.length - 1].balances.get(MINT)).toBe(6);
+    expect(days[0].balances.get(MINT)).toBe(4);
+  });
+
+  it("fails closed for a malformed amount on the genesis day too", () => {
+    const txs: HeliusTx[] = [
+      tx({
+        signature: "genesis",
+        timestamp: TODAY - 3 * DAY_SECONDS + 100,
+        tokenTransfers: [
+          { toUserAccount: W, mint: MINT, tokenAmount: "1.25oops" },
+        ],
+      }),
+    ];
+    expect(() =>
+      reconstructDailyBalances(W, new Map([[MINT, 6]]), txs, TODAY),
+    ).toThrow(VendorError);
+  });
+});

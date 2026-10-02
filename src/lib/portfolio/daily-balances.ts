@@ -22,34 +22,38 @@ export type DayBalances = {
   balances: Map<string, number>;
 };
 
-function undoTx(
-  balances: Map<string, number>,
-  tx: HeliusTx,
-  wallet: string,
-): void {
+type WalletMove = { mint: string; amount: number; incoming: boolean };
+
+function walletMoves(tx: HeliusTx, wallet: string): WalletMove[] {
+  const moves: WalletMove[] = [];
   for (const tt of tx.tokenTransfers || []) {
-    if (!tt.mint) continue;
+    const incoming = tt.toUserAccount === wallet;
+    const outgoing = tt.fromUserAccount === wallet;
+    if (!tt.mint || (!incoming && !outgoing)) continue;
     const amount = parseAmount(tt.tokenAmount);
     if (amount === null) throw malformedAmount(tx, "tokenAmount");
     if (amount <= 0) continue;
-    if (tt.toUserAccount === wallet) {
-      balances.set(tt.mint, (balances.get(tt.mint) || 0) - amount);
-    }
-    if (tt.fromUserAccount === wallet) {
-      balances.set(tt.mint, (balances.get(tt.mint) || 0) + amount);
-    }
+    if (incoming) moves.push({ mint: tt.mint, amount, incoming: true });
+    if (outgoing) moves.push({ mint: tt.mint, amount, incoming: false });
   }
   for (const nt of tx.nativeTransfers || []) {
+    const incoming = nt.toUserAccount === wallet;
+    const outgoing = nt.fromUserAccount === wallet;
+    if (!incoming && !outgoing) continue;
     const lamports = parseAmount(nt.amount);
     if (lamports === null) throw malformedAmount(tx, "amount");
     const sol = lamports / 1e9;
     if (sol <= 0) continue;
-    if (nt.toUserAccount === wallet) {
-      balances.set(SOL_MINT, (balances.get(SOL_MINT) || 0) - sol);
-    }
-    if (nt.fromUserAccount === wallet) {
-      balances.set(SOL_MINT, (balances.get(SOL_MINT) || 0) + sol);
-    }
+    if (incoming) moves.push({ mint: SOL_MINT, amount: sol, incoming: true });
+    if (outgoing) moves.push({ mint: SOL_MINT, amount: sol, incoming: false });
+  }
+  return moves;
+}
+
+function undoTx(balances: Map<string, number>, moves: WalletMove[]): void {
+  for (const move of moves) {
+    const delta = move.incoming ? -move.amount : move.amount;
+    balances.set(move.mint, (balances.get(move.mint) || 0) + delta);
   }
 }
 
@@ -63,6 +67,7 @@ export function reconstructDailyBalances(
     .filter((t) => (t.timestamp || 0) > 0)
     .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   if (sorted.length === 0) return [];
+  const moves = sorted.map((t) => walletMoves(t, wallet));
 
   const genesisDay = floorDay(sorted[sorted.length - 1].timestamp || 0);
   const balances = new Map(currentBalances);
@@ -78,7 +83,7 @@ export function reconstructDailyBalances(
       i < sorted.length &&
       (sorted[i].timestamp || 0) > day + DAY_SECONDS - 1
     ) {
-      undoTx(balances, sorted[i], wallet);
+      undoTx(balances, moves[i]);
       i++;
     }
     const snapshot = new Map<string, number>();
