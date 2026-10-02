@@ -513,6 +513,11 @@ export async function getValueHistory(
     todayValueUsd += r.todayValueUsd;
   }
 
+  if (Date.now() >= deadline) {
+    throw new Error(
+      "request deadline reached before reading the stored series",
+    );
+  }
   const summed = await pool.query(
     `SELECT extract(epoch FROM day)::bigint AS day_ts, sum(value_usd) AS value
        FROM wallet_value_daily

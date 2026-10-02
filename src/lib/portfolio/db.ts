@@ -19,6 +19,7 @@ export function getPool(): Pool {
       connectionString: process.env.DATABASE_URL,
       max: 5,
       connectionTimeoutMillis: 5_000,
+      query_timeout: STATEMENT_TIMEOUT_MS,
       options: SESSION_OPTIONS,
     });
   }
