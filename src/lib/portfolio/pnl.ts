@@ -15,6 +15,7 @@ import {
   SOL_MINT,
   STABLECOIN_MINTS,
   synthesizeSwapFromTransfers,
+  txType,
 } from "@/lib/portfolio/swaps";
 import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 import type {
@@ -156,7 +157,7 @@ async function computeAggregateTradePnL(
   for (const txs of txsPerWallet) {
     for (const tx of txs) {
       if (!tx.timestamp) continue;
-      if (tx.events?.swap || tx.type === "SWAP") {
+      if (tx.events?.swap || txType(tx) === "SWAP") {
         swapDays.add(Math.floor(tx.timestamp / 86400) * 86400);
       }
     }
@@ -289,7 +290,8 @@ async function computeAggregateTradePnL(
     const w = wallets[i];
     const heldMints = heldMintsPerWallet[i];
     for (const tx of txsPerWallet[i]) {
-      if (tx.type && !TRANSFER_ALLOWED_TX_TYPES.has(tx.type)) continue;
+      const kind = txType(tx);
+      if (kind && !TRANSFER_ALLOWED_TX_TYPES.has(kind)) continue;
       const swap = tx?.events?.swap || synthesizeSwapFromTransfers(tx, w);
       const userIsSwapInput =
         swap &&
@@ -475,7 +477,8 @@ async function computeAggregateTradePnL(
   for (let i = 0; i < wallets.length; i++) {
     const w = wallets[i];
     for (const tx of txsPerWallet[i]) {
-      if (tx.type && tx.type !== "TRANSFER") continue;
+      const kind = txType(tx);
+      if (kind && kind !== "TRANSFER") continue;
       const ts = tx.timestamp || 0;
       for (const tt of tx.tokenTransfers || []) {
         const amt = parseAmount(tt.tokenAmount);

@@ -55,6 +55,10 @@ export type WalletSwapEvents = {
 
 export type SolPriceAt = (ts: number) => number;
 
+export function txType(tx: HeliusTx | undefined): string | undefined {
+  return typeof tx?.type === "string" ? tx.type.toUpperCase() : undefined;
+}
+
 export function parseAmount(raw: unknown): number | null {
   if (raw === null || raw === undefined || raw === "") return 0;
   const n =
@@ -94,7 +98,7 @@ export function synthesizeSwapFromTransfers(
   tx: HeliusTx,
   wallet: string,
 ): SwapEvent | null {
-  if (tx?.type !== "SWAP") return null;
+  if (txType(tx) !== "SWAP") return null;
   if (tx.events?.swap) return null;
   const synth: SwapEvent = {
     tokenInputs: [],

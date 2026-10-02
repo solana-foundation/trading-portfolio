@@ -193,6 +193,24 @@ describe("fetchTransactions", () => {
     }
   });
 
+  it("rejects a page whose nested swap or transfer containers are malformed", async () => {
+    const malformed = [
+      {
+        signature: "a",
+        events: { swap: { tokenInputs: { not: "an array" } } },
+      },
+      { signature: "b", tokenTransfers: "nope" },
+      { signature: "c", timestamp: "1700000000" },
+    ];
+    for (const txBody of malformed) {
+      vi.stubEnv("TRITON_API_URL", "");
+      routes([[isHelius, () => json([txBody])]]);
+      const err = await fetchTransactions(wallet()).catch((e) => e);
+      expect(err).toBeInstanceOf(VendorError);
+      expect(err.kind).toBe("shape");
+    }
+  });
+
   it("maps a JSON-RPC auth error code to ProviderAuthError", async () => {
     routes([
       [isHelius, () => json([tx("x", 1)])],

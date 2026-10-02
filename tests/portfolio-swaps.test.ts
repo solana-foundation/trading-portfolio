@@ -315,3 +315,32 @@ describe("malformed vendor amounts", () => {
     expect(buys.size).toBe(0);
   });
 });
+
+describe("transaction type case", () => {
+  it("synthesizes a transfer-only swap regardless of type casing", async () => {
+    const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    const tx = {
+      type: "swap",
+      timestamp: 1_700_000_000,
+      signature: "lower",
+      tokenTransfers: [
+        {
+          toUserAccount: WALLET,
+          mint: "MintCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+          tokenAmount: "5",
+        },
+      ],
+      nativeTransfers: [{ fromUserAccount: WALLET, amount: "2000000000" }],
+    };
+    const { buys, unpricedSwaps } = aggregateSwapEvents(
+      WALLET,
+      [tx],
+      () => 100,
+    );
+    expect(unpricedSwaps).toBe(0);
+    expect(
+      buys.get("MintCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")?.amountBought,
+    ).toBe(5);
+  });
+});

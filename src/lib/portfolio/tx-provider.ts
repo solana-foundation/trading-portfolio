@@ -67,8 +67,55 @@ export function rpcResponse<T extends z.ZodType>(result: T) {
 
 export const jsonRpcSchema = rpcResponse(z.unknown());
 
+const amountSchema = z.union([z.number(), z.string()]).nullish();
+const accountSchema = z.string().nullish();
+const tokenTransferSchema = z.looseObject({
+  fromUserAccount: accountSchema,
+  toUserAccount: accountSchema,
+  mint: z.string().nullish(),
+  tokenAmount: amountSchema,
+});
+const nativeTransferSchema = z.looseObject({
+  fromUserAccount: accountSchema,
+  toUserAccount: accountSchema,
+  amount: amountSchema,
+});
+const tokenSideSchema = z.looseObject({
+  userAccount: accountSchema,
+  mint: z.string().nullish(),
+  rawTokenAmount: z
+    .looseObject({
+      tokenAmount: amountSchema,
+      decimals: z.union([z.number(), z.string()]).nullish(),
+    })
+    .nullish(),
+});
+const nativeSideSchema = z
+  .looseObject({ account: accountSchema, amount: amountSchema })
+  .nullish();
+const heliusTxSchema = z.looseObject({
+  signature: z.string().nullish(),
+  type: z.string().nullish(),
+  timestamp: z.number().nullish(),
+  source: z.string().nullish(),
+  tokenTransfers: z.array(tokenTransferSchema).nullish(),
+  nativeTransfers: z.array(nativeTransferSchema).nullish(),
+  events: z
+    .looseObject({
+      swap: z
+        .looseObject({
+          nativeInput: nativeSideSchema,
+          nativeOutput: nativeSideSchema,
+          tokenInputs: z.array(tokenSideSchema).nullish(),
+          tokenOutputs: z.array(tokenSideSchema).nullish(),
+        })
+        .nullish(),
+    })
+    .nullish(),
+});
+
 const heliusTxPageSchema = z.union([
-  z.array(z.looseObject({ signature: z.string().optional() })),
+  z.array(heliusTxSchema),
   z.looseObject({ error: z.union([z.string(), rpcErrorSchema]) }),
 ]);
 
