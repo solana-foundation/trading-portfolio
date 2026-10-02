@@ -113,6 +113,20 @@ describe("mapError", () => {
     expect(String(spy.mock.calls[0][1])).toContain("kind=auth");
   });
 
+  it("maps a configuration error to the provider-unavailable message", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const e = new VendorError({
+      vendor: "birdeye",
+      kind: "config",
+      path: "env",
+      message: "BIRDEYE_API_KEY is not set",
+    });
+    expect(mapError(e, "fallback")).toEqual({
+      status: 502,
+      error: "Upstream data provider unavailable.",
+    });
+  });
+
   it("maps every other value to 502 with the fallback message", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const vendor = new VendorError({

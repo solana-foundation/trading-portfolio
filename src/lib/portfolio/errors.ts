@@ -62,8 +62,11 @@ export function mapError(
   e: unknown,
   fallback: string,
 ): { status: 502; error: string } {
-  if (e instanceof ProviderAuthError) {
-    console.error("portfolio: provider auth failed:", describeError(e));
+  if (
+    e instanceof ProviderAuthError ||
+    (e instanceof VendorError && e.kind === "config")
+  ) {
+    console.error("portfolio: provider unavailable:", describeError(e));
     return { status: 502, error: "Upstream data provider unavailable." };
   }
   console.error("portfolio: request failed:", describeError(e));
