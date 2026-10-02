@@ -94,6 +94,7 @@ const tokenListSchema = z.looseObject({
 
 const historicalPriceSchema = z.looseObject({
   success: z.boolean().nullish(),
+  message: z.string().nullish(),
   data: z.looseObject({ value: z.number().nullish() }).nullish(),
 });
 
@@ -220,27 +221,46 @@ async function fetchHistoricalPrice(
   mint: string,
   dayTs: number,
 ): Promise<number | null> {
+  const path = "/defi/historical_price_unix";
   const data = await birdeyeFetch(
-    `https://public-api.birdeye.so/defi/historical_price_unix?address=${mint}&unixtime=${dayTs}`,
+    `https://public-api.birdeye.so${path}?address=${mint}&unixtime=${dayTs}`,
     historicalPriceSchema,
   );
+  if (data.success === false) {
+    throw new VendorError({
+      vendor: "birdeye",
+      kind: "api",
+      path,
+      message: `Birdeye reported failure for ${mint.slice(0, 4)}…@${dayTs}${data.message ? `: ${data.message}` : ""}`,
+    });
+  }
   if (data.success && typeof data.data?.value === "number") {
     return data.data.value;
   }
   return null;
 }
 
-export function getHistoricalPrice(
+function isVendorRefusal(e: unknown): e is VendorError {
+  return e instanceof VendorError && e.vendor === "birdeye" && e.kind === "api";
+}
+
+export async function getHistoricalPrice(
   mint: string,
   unixTs: number,
 ): Promise<number | null> {
-  if (!unixTs || unixTs <= 0) return Promise.resolve(null);
+  if (!unixTs || unixTs <= 0) return null;
   const dayTs = floorDayTs(unixTs);
-  return histPriceCache.getOrFetch(
-    `${mint}:${dayTs}`,
-    () => fetchHistoricalPrice(mint, dayTs),
-    negativeTtl,
-  );
+  try {
+    return await histPriceCache.getOrFetch(
+      `${mint}:${dayTs}`,
+      () => fetchHistoricalPrice(mint, dayTs),
+      negativeTtl,
+    );
+  } catch (e) {
+    if (!isVendorRefusal(e)) throw e;
+    console.warn(`portfolio: ${describeError(e)}`);
+    return null;
+  }
 }
 
 export async function getHistoricalPrices(

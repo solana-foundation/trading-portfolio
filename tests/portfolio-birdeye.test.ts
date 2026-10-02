@@ -85,6 +85,19 @@ describe("getHistoricalPrice", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("treats success:false as unpriced for this call only, never cached", async () => {
+    const m = mint();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock
+      .mockResolvedValueOnce(json({ success: false, message: "bad address" }))
+      .mockResolvedValueOnce(json({ success: true, data: { value: 4 } }));
+    expect(await getHistoricalPrice(m, DAY * 10)).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("bad address");
+    expect(await getHistoricalPrice(m, DAY * 10)).toBe(4);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("throws after retries on 5xx and does not cache the failure", async () => {
     const m = mint();
     fetchMock
