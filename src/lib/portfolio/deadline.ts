@@ -1,6 +1,10 @@
 export class DeadlineError extends Error {
-  constructor(what: string, budgetMs: number) {
-    super(`${what} exceeded its ${budgetMs}ms time budget`);
+  constructor(what: string, budgetMs?: number) {
+    super(
+      budgetMs === undefined
+        ? `${what} exceeded its time budget`
+        : `${what} exceeded its ${budgetMs}ms time budget`,
+    );
     this.name = "DeadlineError";
   }
 }

@@ -8,6 +8,7 @@ import {
   getTokenMeta,
   getTokenMetas,
 } from "@/lib/portfolio/birdeye";
+import { DeadlineError } from "@/lib/portfolio/deadline";
 import { ProviderAuthError, VendorError } from "@/lib/portfolio/errors";
 
 const DAY = 86_400;
@@ -221,6 +222,31 @@ describe("getPriceSeries", () => {
       expect(err).toBeInstanceOf(VendorError);
       expect(err.kind).toBe("shape");
     }
+  });
+
+  it("stops between chunks once the caller's deadline has passed", async () => {
+    const m = mint();
+    const deadline = Date.now() + 5_000;
+    fetchMock.mockImplementationOnce(async () => {
+      vi.setSystemTime(Date.now() + 10_000);
+      return json({
+        success: true,
+        data: { items: [{ unixTime: DAY, value: 1 }] },
+      });
+    });
+    const err = await getPriceSeries(m, 0, DAY * 1000, deadline).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(DeadlineError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a series whose deadline has already passed", async () => {
+    const err = await getPriceSeries(mint(), 0, DAY, Date.now() - 1).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(DeadlineError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("merges chunks keyed by floored day", async () => {

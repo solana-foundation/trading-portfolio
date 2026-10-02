@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TtlCache } from "@/lib/portfolio/cache";
 import { createLimiter, mapLimit } from "@/lib/portfolio/concurrency";
+import { DeadlineError } from "@/lib/portfolio/deadline";
 import {
   describeError,
   ProviderAuthError,
@@ -330,19 +331,27 @@ export async function getHistoricalPrices(
 }
 
 const SERIES_CHUNK_DAYS = 800;
+const SERIES_BUDGET_MS = 40_000;
 
 export async function getPriceSeries(
   mint: string,
   fromTs: number,
   toTs: number,
+  deadline?: number,
 ): Promise<Map<number, number>> {
   const out = new Map<number, number>();
   const path = "/defi/history_price";
   for (let from = fromTs; from <= toTs; from += SERIES_CHUNK_DAYS * 86_400) {
     const to = Math.min(from + SERIES_CHUNK_DAYS * 86_400 - 1, toTs);
+    const remaining =
+      deadline === undefined ? SERIES_BUDGET_MS : deadline - Date.now();
+    if (remaining <= 0) {
+      throw new DeadlineError(`price series of ${mint.slice(0, 4)}…`);
+    }
     const data = await birdeyeFetch(
       `https://public-api.birdeye.so${path}?address=${mint}&address_type=token&type=1D&time_from=${from}&time_to=${to}`,
       priceSeriesSchema,
+      { budgetMs: Math.min(SERIES_BUDGET_MS, remaining) },
     );
     if (data.success !== true) {
       throw refusal(path, `price series of ${mint.slice(0, 4)}…`, data.message);

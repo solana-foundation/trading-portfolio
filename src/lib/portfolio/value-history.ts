@@ -116,7 +116,7 @@ export function seriesOrSkip(
   fetchSeries: typeof getPriceSeries = getPriceSeries,
 ): Promise<Map<number, number>> | null {
   if (Date.now() >= deadline) return null;
-  return fetchSeries(mint, fromTs, toTs);
+  return fetchSeries(mint, fromTs, toTs, deadline);
 }
 
 async function pricesFor(
@@ -175,6 +175,10 @@ async function pricesFor(
       return Promise.resolve(new Map<number, number>());
     }
     return pending.catch((e: unknown) => {
+      if (e instanceof DeadlineError) {
+        cutShort = true;
+        return new Map<number, number>();
+      }
       if (!isBirdeyeRefusal(e)) throw e;
       refused = true;
       console.warn(`portfolio: ${describeError(e)}`);
