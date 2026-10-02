@@ -110,7 +110,18 @@ describe("getHistoricalPrice", () => {
     expect(await getHistoricalPrice(m, DAY * 10)).toBe(6);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(warn).toHaveBeenCalledTimes(2);
-    expect(String(warn.mock.calls[0][0])).toContain("kind=shape");
+    expect(String(warn.mock.calls[0][0])).toContain("without a success flag");
+  });
+
+  it("fails loud when a successful body carries a price of the wrong type", async () => {
+    const m = mint();
+    fetchMock.mockResolvedValueOnce(
+      json({ success: true, data: { value: "12.5" } }),
+    );
+    const err = await getHistoricalPrice(m, DAY * 10).catch((e) => e);
+    expect(err).toBeInstanceOf(VendorError);
+    expect(err.kind).toBe("shape");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("throws after retries on 5xx and does not cache the failure", async () => {

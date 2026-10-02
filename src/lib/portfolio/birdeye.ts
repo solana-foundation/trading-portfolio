@@ -102,7 +102,7 @@ const tokenListSchema = z.looseObject({
 });
 
 const historicalPriceSchema = z.looseObject({
-  success: z.boolean(),
+  success: z.boolean().nullish(),
   message: z.string().nullish(),
   data: z.looseObject({ value: z.number().nullish() }).nullish(),
 });
@@ -139,7 +139,7 @@ const netWorthSchema = z.looseObject({
 });
 
 const tokenMetaSchema = z.looseObject({
-  success: z.boolean(),
+  success: z.boolean().nullish(),
   data: z
     .looseObject({
       symbol: z.string().nullish(),
@@ -240,26 +240,23 @@ async function fetchHistoricalPrice(
     `https://public-api.birdeye.so${path}?address=${mint}&unixtime=${dayTs}`,
     historicalPriceSchema,
   );
-  if (data.success === false) {
+  if (data.success !== true) {
+    const detail =
+      data.success === false
+        ? `reported failure${data.message ? `: ${data.message}` : ""}`
+        : "answered without a success flag";
     throw new VendorError({
       vendor: "birdeye",
       kind: "api",
       path,
-      message: `Birdeye reported failure for ${mint.slice(0, 4)}…@${dayTs}${data.message ? `: ${data.message}` : ""}`,
+      message: `Birdeye ${detail} for ${mint.slice(0, 4)}…@${dayTs}`,
     });
   }
-  if (data.success && typeof data.data?.value === "number") {
-    return data.data.value;
-  }
-  return null;
+  return typeof data.data?.value === "number" ? data.data.value : null;
 }
 
-function isUnusableAnswer(e: unknown): e is VendorError {
-  return (
-    e instanceof VendorError &&
-    e.vendor === "birdeye" &&
-    (e.kind === "api" || e.kind === "shape")
-  );
+function isVendorRefusal(e: unknown): e is VendorError {
+  return e instanceof VendorError && e.vendor === "birdeye" && e.kind === "api";
 }
 
 export async function getHistoricalPrice(
@@ -275,7 +272,7 @@ export async function getHistoricalPrice(
       negativeTtl,
     );
   } catch (e) {
-    if (!isUnusableAnswer(e)) throw e;
+    if (!isVendorRefusal(e)) throw e;
     console.warn(`portfolio: ${describeError(e)}`);
     return null;
   }
