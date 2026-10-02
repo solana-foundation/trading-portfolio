@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import {
   getHistoricalPrice,
+  getHistoricalPrices,
   getHoldings,
-  getTokenMeta,
+  getTokenMetas,
 } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
+import { mapLimit } from "@/lib/portfolio/concurrency";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 import {
   aggregateSwapEvents,
@@ -23,6 +25,8 @@ import type {
 import { type Cashflow, computeXIRR } from "@/lib/portfolio/xirr";
 
 const resultCache = new TtlCache<TradePnLResult>(500, 5 * 60 * 1000);
+const HOLDINGS_CONCURRENCY = 8;
+const TX_FETCH_CONCURRENCY = 4;
 
 export function tradeSortKey(t: TradeHistoryRow): string {
   return [t.signature || "", t.kind, t.wallet, t.mint].join("|");
@@ -94,7 +98,20 @@ type TransferEvent = {
 export async function getPortfolioHoldings(
   wallets: string[],
 ): Promise<Holdings[]> {
-  return Promise.all(wallets.map((w) => getHoldings(w)));
+  return mapLimit(wallets, HOLDINGS_CONCURRENCY, (w) => getHoldings(w));
+}
+
+async function solPricesByDay(
+  days: Iterable<number>,
+): Promise<Map<number, number>> {
+  const queries = Array.from(days, (day) => ({ mint: SOL_MINT, ts: day }));
+  const prices = await getHistoricalPrices(queries);
+  const out = new Map<number, number>();
+  for (const q of queries) {
+    const p = prices.get(`${SOL_MINT}:${q.ts}`);
+    if (p && p > 0) out.set(q.ts, p);
+  }
+  return out;
 }
 
 export function getAggregateTradePnL(
@@ -122,7 +139,9 @@ async function computeAggregateTradePnL(
   holdings: Holdings[],
   netWorthUsd?: number,
 ): Promise<TradePnLResult> {
-  const txFetches = await Promise.all(wallets.map((w) => fetchTransactions(w)));
+  const txFetches = await mapLimit(wallets, TX_FETCH_CONCURRENCY, (w) =>
+    fetchTransactions(w),
+  );
   const txsPerWallet = txFetches.map((f) => f.txs);
   const historyTruncated = txFetches.some((f) => f.truncated);
   const householdSet = new Set(wallets);
@@ -140,13 +159,7 @@ async function computeAggregateTradePnL(
       }
     }
   }
-  const solPriceByDay = new Map<number, number>();
-  await Promise.all(
-    Array.from(swapDays).map(async (day) => {
-      const p = await getHistoricalPrice(SOL_MINT, day);
-      if (p && p > 0) solPriceByDay.set(day, p);
-    }),
-  );
+  const solPriceByDay = await solPricesByDay(swapDays);
   const todayDay = Math.floor(Date.now() / 1000 / 86400) * 86400;
   let solPriceFellBack = false;
   const solPriceAt = (ts: number) => {
@@ -311,13 +324,9 @@ async function computeAggregateTradePnL(
     if (!uniqueQueries.has(key))
       uniqueQueries.set(key, { mint: ev.mint, ts: day });
   }
-  const priceLookups = await Promise.all(
-    Array.from(uniqueQueries.entries()).map(async ([key, q]) => {
-      const price = await getHistoricalPrice(q.mint, q.ts);
-      return [key, price] as const;
-    }),
+  const priceMap = await getHistoricalPrices(
+    Array.from(uniqueQueries.values()),
   );
-  const priceMap = new Map<string, number | null>(priceLookups);
 
   for (const ev of transferEvents) {
     const day = Math.floor((ev.ts || 0) / 86400) * 86400;
@@ -333,17 +342,17 @@ async function computeAggregateTradePnL(
       bumpWalletMint(wIdx, ev.mint, cost, ev.amount, 1, "transfer");
   }
 
-  await Promise.all(
-    Array.from(byMint.entries())
-      .filter(([, m]) => m.totalSpent > 0 && !m.symbol)
-      .map(async ([mint, m]) => {
-        const meta = await getTokenMeta(mint);
-        if (meta) {
-          m.symbol = meta.symbol;
-          if (!m.icon) m.icon = meta.icon;
-        }
-      }),
+  const unlabeled = Array.from(byMint.entries()).filter(
+    ([, m]) => m.totalSpent > 0 && !m.symbol,
   );
+  const metas = await getTokenMetas(unlabeled.map(([mint]) => mint));
+  for (const [mint, m] of unlabeled) {
+    const meta = metas.get(mint);
+    if (meta) {
+      m.symbol = meta.symbol;
+      if (!m.icon) m.icon = meta.icon;
+    }
+  }
 
   const perWallet: Record<string, TradePnLRow[]> = {};
   let totalPnL = 0;
@@ -508,13 +517,9 @@ async function computeAggregateTradePnL(
     if (!extPriceQueries.has(key))
       extPriceQueries.set(key, { mint: ev.mint, ts: day });
   }
-  const extPriceLookups = await Promise.all(
-    Array.from(extPriceQueries.entries()).map(
-      async ([key, q]) =>
-        [key, await getHistoricalPrice(q.mint, q.ts)] as const,
-    ),
+  const extPriceMap = await getHistoricalPrices(
+    Array.from(extPriceQueries.values()),
   );
-  const extPriceMap = new Map<string, number | null>(extPriceLookups);
 
   const cashflowEvents: Cashflow[] = [];
   let unpricedCashflowCount = 0;
@@ -567,13 +572,7 @@ async function computeAggregateTradePnL(
     const solQueries = new Set(
       cashflowEvents.map((c) => Math.floor(c.ts / 86400) * 86400),
     );
-    const benchSolPriceByDay = new Map<number, number>();
-    await Promise.all(
-      Array.from(solQueries).map(async (day) => {
-        const p = await getHistoricalPrice(SOL_MINT, day);
-        if (p && p > 0) benchSolPriceByDay.set(day, p);
-      }),
-    );
+    const benchSolPriceByDay = await solPricesByDay(solQueries);
     let netSol = 0;
     const bcfs: Cashflow[] = [];
     for (const c of cashflowEvents) {
