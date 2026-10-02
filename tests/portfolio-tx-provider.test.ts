@@ -160,6 +160,27 @@ describe("fetchTransactions", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("fails loud on a malformed token-account envelope instead of reporting complete history", async () => {
+    for (const body of [
+      {},
+      { result: null },
+      { result: {} },
+      { result: { value: null } },
+    ]) {
+      const w = wallet();
+      routes([
+        [isHelius, () => json([tx("x", 1)])],
+        [isRpc, () => json(body)],
+      ]);
+      const err = await fetchTransactions(w).catch((e) => e);
+      expect(err).toBeInstanceOf(VendorError);
+      expect(err.kind).toBe("shape");
+      expect(await fetchTransactions(w).catch((e) => e)).toBeInstanceOf(
+        VendorError,
+      );
+    }
+  });
+
   it("maps a JSON-RPC auth error code to ProviderAuthError", async () => {
     routes([
       [isHelius, () => json([tx("x", 1)])],

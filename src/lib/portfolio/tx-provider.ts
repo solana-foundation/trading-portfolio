@@ -74,7 +74,7 @@ const heliusTxPageSchema = z.union([
 
 const tokenAccountsSchema = rpcResponse(
   z.looseObject({
-    value: z.array(z.looseObject({ pubkey: z.string().nullish() })).nullish(),
+    value: z.array(z.looseObject({ pubkey: z.string().nullish() })),
   }),
 );
 
@@ -255,7 +255,15 @@ async function getTokenAccounts(wallet: string): Promise<string[]> {
         message: `helius rpc getTokenAccountsByOwner failed for ${wallet.slice(0, 4)}…: ${msg}`,
       });
     }
-    for (const v of resp.result?.value || []) {
+    if (!resp.result) {
+      throw new VendorError({
+        vendor: "helius",
+        kind: "shape",
+        path: "getTokenAccountsByOwner",
+        message: `helius rpc getTokenAccountsByOwner returned no result for ${wallet.slice(0, 4)}…`,
+      });
+    }
+    for (const v of resp.result.value) {
       if (v.pubkey) out.push(v.pubkey);
     }
   }
