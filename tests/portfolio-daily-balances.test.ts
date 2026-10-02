@@ -109,26 +109,23 @@ describe("reconstructDailyBalances", () => {
 });
 
 describe("malformed amounts", () => {
-  it("fails closed instead of reconstructing balances from a malformed amount", async () => {
-    const { reconstructDailyBalances } = await import(
-      "@/lib/portfolio/daily-balances"
-    );
-    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
-    const txs = [
-      {
+  it("fails closed instead of reconstructing balances from a malformed amount", () => {
+    const txs: HeliusTx[] = [
+      tx({
         signature: "bad",
-        timestamp: 1_700_000_000,
+        timestamp: TODAY - 3 * DAY_SECONDS + 100,
         tokenTransfers: [
-          {
-            toUserAccount: WALLET,
-            mint: "MintDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
-            tokenAmount: "10garbage",
-          },
+          { toUserAccount: W, mint: MINT, tokenAmount: "10garbage" },
         ],
-      },
+      }),
+      tx({
+        signature: "older",
+        timestamp: TODAY - 5 * DAY_SECONDS + 100,
+        tokenTransfers: [{ toUserAccount: W, mint: MINT, tokenAmount: "1" }],
+      }),
     ];
     expect(() =>
-      reconstructDailyBalances(WALLET, new Map(), txs, 1_700_100_000),
+      reconstructDailyBalances(W, new Map([[MINT, 6]]), txs, TODAY),
     ).toThrow(VendorError);
   });
 });
