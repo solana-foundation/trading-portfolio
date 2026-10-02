@@ -28,6 +28,7 @@ const NFT_SCAN_CAP = 40;
 const MIN_POSITION_USD = 0.01;
 const WALLET_CONCURRENCY = 4;
 const NFT_PROBE_CONCURRENCY = 5;
+const ACCOUNTS_PER_LOOKUP = 100;
 
 const OWNER_ACCOUNT_PROTOCOLS = [
   {
@@ -223,14 +224,15 @@ async function kaminoDeposits(wallet: string): Promise<DefiPositionRow[]> {
   const unknownReserves = deposits
     .map((d) => d.reserve)
     .filter((r) => reserveMintCache.get(r) === undefined);
-  if (unknownReserves.length > 0) {
+  for (let i = 0; i < unknownReserves.length; i += ACCOUNTS_PER_LOOKUP) {
+    const batch = unknownReserves.slice(i, i + ACCOUNTS_PER_LOOKUP);
     const infos = await rpc(
       "getMultipleAccounts",
-      [unknownReserves, { encoding: "base64" }],
+      [batch, { encoding: "base64" }],
       multipleAccountsSchema,
     );
-    unknownReserves.forEach((reserve, i) => {
-      const info = infos.value[i];
+    batch.forEach((reserve, j) => {
+      const info = infos.value[j];
       if (!info) return;
       const data = Buffer.from(info.data[0], "base64");
       reserveMintCache.set(
