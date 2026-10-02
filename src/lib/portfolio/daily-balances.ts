@@ -1,5 +1,5 @@
 import type { HeliusTx } from "@/lib/portfolio/swaps";
-import { SOL_MINT } from "@/lib/portfolio/swaps";
+import { parseAmount, SOL_MINT } from "@/lib/portfolio/swaps";
 
 export const DAY_SECONDS = 86_400;
 
@@ -19,7 +19,7 @@ function undoTx(
 ): void {
   for (const tt of tx.tokenTransfers || []) {
     if (!tt.mint) continue;
-    const amount = Number.parseFloat(String(tt.tokenAmount ?? 0)) || 0;
+    const amount = parseAmount(tt.tokenAmount) ?? 0;
     if (amount <= 0) continue;
     if (tt.toUserAccount === wallet) {
       balances.set(tt.mint, (balances.get(tt.mint) || 0) - amount);
@@ -29,7 +29,7 @@ function undoTx(
     }
   }
   for (const nt of tx.nativeTransfers || []) {
-    const sol = (Number.parseFloat(String(nt.amount ?? 0)) || 0) / 1e9;
+    const sol = (parseAmount(nt.amount) ?? 0) / 1e9;
     if (sol <= 0) continue;
     if (nt.toUserAccount === wallet) {
       balances.set(SOL_MINT, (balances.get(SOL_MINT) || 0) - sol);

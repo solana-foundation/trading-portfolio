@@ -11,6 +11,7 @@ import { MAX_WALLETS_PER_REQUEST } from "@/lib/portfolio/request";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 import {
   aggregateSwapEvents,
+  parseAmount,
   SOL_MINT,
   STABLECOIN_MINTS,
   synthesizeSwapFromTransfers,
@@ -303,7 +304,11 @@ async function computeAggregateTradePnL(
         if (!heldMints.has(mint)) continue;
         if (tt.fromUserAccount && householdSet.has(tt.fromUserAccount))
           continue;
-        const amount = Number.parseFloat(String(tt.tokenAmount ?? 0)) || 0;
+        const amount = parseAmount(tt.tokenAmount);
+        if (amount === null) {
+          hasUnpriced = true;
+          continue;
+        }
         if (amount <= 0) continue;
         transferEvents.push({
           mint,
@@ -473,7 +478,11 @@ async function computeAggregateTradePnL(
       if (tx.type && tx.type !== "TRANSFER") continue;
       const ts = tx.timestamp || 0;
       for (const tt of tx.tokenTransfers || []) {
-        const amt = Number.parseFloat(String(tt.tokenAmount ?? 0)) || 0;
+        const amt = parseAmount(tt.tokenAmount);
+        if (amt === null) {
+          hasUnpriced = true;
+          continue;
+        }
         if (amt <= 0 || !tt.mint) continue;
         if (
           tt.toUserAccount === w &&
@@ -490,7 +499,11 @@ async function computeAggregateTradePnL(
         }
       }
       for (const nt of tx.nativeTransfers || []) {
-        const lam = Number.parseFloat(String(nt.amount ?? 0)) || 0;
+        const lam = parseAmount(nt.amount);
+        if (lam === null) {
+          hasUnpriced = true;
+          continue;
+        }
         const sol = lam / 1e9;
         if (sol <= 0) continue;
         if (

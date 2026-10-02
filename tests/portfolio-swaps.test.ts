@@ -244,3 +244,74 @@ describe("synthesizeSwapFromTransfers", () => {
     expect(SOL_MINT).toBe("So11111111111111111111111111111111111111112");
   });
 });
+
+describe("parseAmount", () => {
+  it("accepts numbers and numeric strings, rejects malformed prefixes", async () => {
+    const { parseAmount } = await import("@/lib/portfolio/swaps");
+    expect(parseAmount(12.5)).toBe(12.5);
+    expect(parseAmount("12.5")).toBe(12.5);
+    expect(parseAmount(" 7 ")).toBe(7);
+    expect(parseAmount(undefined)).toBe(0);
+    expect(parseAmount(null)).toBe(0);
+    expect(parseAmount("")).toBe(0);
+    expect(parseAmount("10garbage")).toBeNull();
+    expect(parseAmount("1.25oops")).toBeNull();
+    expect(parseAmount("Infinity")).toBeNull();
+    expect(parseAmount({})).toBeNull();
+  });
+});
+
+describe("malformed vendor amounts", () => {
+  it("counts a swap with a malformed token amount as unpriced instead of pricing it", async () => {
+    const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    const tx = {
+      type: "SWAP",
+      timestamp: 1_700_000_000,
+      signature: "sig",
+      events: {
+        swap: {
+          nativeInput: { account: WALLET, amount: "1000000000" },
+          tokenOutputs: [
+            {
+              userAccount: WALLET,
+              mint: "MintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              rawTokenAmount: { tokenAmount: "10garbage", decimals: 0 },
+            },
+          ],
+        },
+      },
+    };
+    const { buys, unpricedSwaps } = aggregateSwapEvents(
+      WALLET,
+      [tx],
+      () => 100,
+    );
+    expect(unpricedSwaps).toBe(1);
+    expect(buys.size).toBe(0);
+  });
+
+  it("marks a synthesized swap with a malformed transfer amount as unpriced", async () => {
+    const { aggregateSwapEvents } = await import("@/lib/portfolio/swaps");
+    const WALLET = "86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY";
+    const tx = {
+      type: "SWAP",
+      timestamp: 1_700_000_000,
+      tokenTransfers: [
+        {
+          toUserAccount: WALLET,
+          mint: "MintBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          tokenAmount: "1000000x",
+        },
+      ],
+      nativeTransfers: [{ fromUserAccount: WALLET, amount: "2000000000" }],
+    };
+    const { buys, unpricedSwaps } = aggregateSwapEvents(
+      WALLET,
+      [tx],
+      () => 100,
+    );
+    expect(unpricedSwaps).toBe(1);
+    expect(buys.size).toBe(0);
+  });
+});
