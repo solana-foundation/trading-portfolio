@@ -373,12 +373,13 @@ async function syncWalletExclusive(
 const syncInFlight = new Map<string, Promise<SyncOutcome>>();
 
 function syncWallet(wallet: string, todayDay: number): Promise<SyncOutcome> {
-  const inFlight = syncInFlight.get(wallet);
+  const key = `${wallet}:${todayDay}`;
+  const inFlight = syncInFlight.get(key);
   if (inFlight) return inFlight;
   const p = syncWalletExclusive(wallet, todayDay).finally(() =>
-    syncInFlight.delete(wallet),
+    syncInFlight.delete(key),
   );
-  syncInFlight.set(wallet, p);
+  syncInFlight.set(key, p);
   return p;
 }
 
