@@ -7,6 +7,7 @@ import {
   VendorError,
 } from "@/lib/portfolio/errors";
 import { type FetchOptions, fetchJSON } from "@/lib/portfolio/fetch-json";
+import { MAX_WALLETS_PER_REQUEST } from "@/lib/portfolio/request";
 import { SOL_MINT } from "@/lib/portfolio/swaps";
 import type {
   HiddenReason,
@@ -42,6 +43,7 @@ type TokenListItem = {
 export type TokenMeta = { symbol: string; icon?: string };
 
 const birdeyeGate = createLimiter(BIRDEYE_CONCURRENCY);
+const tokenListGate = createLimiter(MAX_WALLETS_PER_REQUEST);
 const tokenListCache = new TtlCache<TokenListItem[]>(1_000, 2 * 60 * 1000);
 const histPriceCache = new TtlCache<number | null>(10_000, WEEK_MS);
 const tokenMetaCache = new TtlCache<TokenMeta | null>(5_000, WEEK_MS);
@@ -156,7 +158,7 @@ async function fetchTokenList(wallet: string): Promise<TokenListItem[]> {
     {
       attemptTimeoutMs: TOKEN_LIST_ATTEMPT_TIMEOUT_MS,
       budgetMs: TOKEN_LIST_BUDGET_MS,
-      gate: undefined,
+      gate: tokenListGate,
     },
   );
   return (data.data?.items || []).map((t) => ({
