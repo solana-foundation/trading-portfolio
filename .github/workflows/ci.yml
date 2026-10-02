@@ -23,13 +23,45 @@ jobs:
 
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm typecheck
 
+      - run: pnpm lint
+
       - run: pnpm test
 
       - run: pnpm build
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - run: docker build -t api:ci .
+
+      - run: docker build -t migrate:ci -f db/Dockerfile.migrate .
+
+      - name: Container smoke
+        run: |
+          set -euo pipefail
+          docker run -d --name api -p 8080:8080 api:ci
+          for i in $(seq 1 30); do
+            curl -sf localhost:8080/api/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf localhost:8080/api/health | grep -q '"ok":true'
+          code=$(curl -s -o /tmp/body -w '%{http_code}' -X POST localhost:8080/api/portfolio/summary \
+            -H 'content-type: application/json' -d '{}')
+          [ "$code" = "400" ]
+          grep -q "wallets must be an array" /tmp/body
+          code=$(curl -s -o /tmp/body -w '%{http_code}' -X POST localhost:8080/api/portfolio/value-history \
+            -H 'content-type: application/json' -d '{"wallets":["86xCnPeV69n6t3DnyGvkKobf9FdN2H9oiVDdaMpo2MMY"]}')
+          [ "$code" = "503" ]
+          ./scripts/smoke.sh http://localhost:8080
+          docker logs api
+          docker rm -f api

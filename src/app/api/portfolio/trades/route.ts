@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 import {
   getAggregateTradePnL,
   getPortfolioHoldings,
   tradeSortKey,
 } from "@/lib/portfolio/pnl";
 import { parseWalletsBody } from "@/lib/portfolio/request";
+import { ProviderAuthError } from "@/lib/portfolio/tx-provider";
 import type { TradeHistoryRow } from "@/lib/portfolio/types";
 
 export const runtime = "nodejs";
@@ -37,10 +37,16 @@ export async function POST(request: Request) {
   const parsed = await parseWalletsBody(request, {
     limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
     cursor: z.string().max(400).optional(),
-    mint: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/).optional(),
+    mint: z
+      .string()
+      .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, { error: "invalid mint address" })
+      .optional(),
   });
   if (!parsed.ok) {
-    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+    return NextResponse.json(
+      { error: parsed.error },
+      { status: parsed.status },
+    );
   }
   const limit = (parsed.body.limit as number | undefined) ?? DEFAULT_LIMIT;
   const cursor = parseCursor(parsed.body.cursor as string | undefined);
@@ -49,7 +55,11 @@ export async function POST(request: Request) {
   try {
     const holdings = await getPortfolioHoldings(parsed.wallets);
     const netWorth = holdings.reduce((s, h) => s + h.totalValue, 0);
-    const result = await getAggregateTradePnL(parsed.wallets, holdings, netWorth);
+    const result = await getAggregateTradePnL(
+      parsed.wallets,
+      holdings,
+      netWorth,
+    );
 
     let trades = result.tradeHistory;
     if (mint) trades = trades.filter((t) => t.mint === mint);

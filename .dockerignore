@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.github
+.vitest
+.env
+.env.*
+*.tsbuildinfo
+terraform
+docs
+dashboards
+alert-rules

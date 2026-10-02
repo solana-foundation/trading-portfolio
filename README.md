@@ -201,6 +201,7 @@ Provider keys stay server-side; never expose them to a browser.
 
 ```bash
 pnpm typecheck
+pnpm lint
 pnpm test
 ```
 

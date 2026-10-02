@@ -5,14 +5,14 @@ import {
   getTokenMeta,
 } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
-import { fetchTransactions } from "@/lib/portfolio/tx-provider";
+import type { HeliusTx } from "@/lib/portfolio/swaps";
 import {
   aggregateSwapEvents,
   SOL_MINT,
   STABLECOIN_MINTS,
   synthesizeSwapFromTransfers,
 } from "@/lib/portfolio/swaps";
-import type { HeliusTx } from "@/lib/portfolio/swaps";
+import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 import type {
   Holdings,
   TradeHistoryRow,
@@ -20,7 +20,7 @@ import type {
   TradePnLRow,
   TradePnLSummary,
 } from "@/lib/portfolio/types";
-import { computeXIRR, type Cashflow } from "@/lib/portfolio/xirr";
+import { type Cashflow, computeXIRR } from "@/lib/portfolio/xirr";
 
 const resultCache = new TtlCache<TradePnLResult>(500, 5 * 60 * 1000);
 
@@ -115,9 +115,7 @@ export async function getAggregateTradePnL(
   const cached = resultCache.get(cacheKey);
   if (cached) return cached;
 
-  const txFetches = await Promise.all(
-    wallets.map((w) => fetchTransactions(w)),
-  );
+  const txFetches = await Promise.all(wallets.map((w) => fetchTransactions(w)));
   const txsPerWallet = txFetches.map((f) => f.txs);
   const historyTruncated = txFetches.some((f) => f.truncated);
   const householdSet = new Set(wallets);
@@ -218,8 +216,21 @@ export async function getAggregateTradePnL(
         hasUnpriced = true;
         continue;
       }
-      bumpMint(mint, entry.totalCostUsd, entry.amountBought, entry.txCount, "swap");
-      bumpWalletMint(i, mint, entry.totalCostUsd, entry.amountBought, entry.txCount, "swap");
+      bumpMint(
+        mint,
+        entry.totalCostUsd,
+        entry.amountBought,
+        entry.txCount,
+        "swap",
+      );
+      bumpWalletMint(
+        i,
+        mint,
+        entry.totalCostUsd,
+        entry.amountBought,
+        entry.txCount,
+        "swap",
+      );
     }
   }
 
@@ -269,7 +280,8 @@ export async function getAggregateTradePnL(
         if (!mint) continue;
         if (isExcludedMint(mint)) continue;
         if (!heldMints.has(mint)) continue;
-        if (tt.fromUserAccount && householdSet.has(tt.fromUserAccount)) continue;
+        if (tt.fromUserAccount && householdSet.has(tt.fromUserAccount))
+          continue;
         const amount = Number.parseFloat(String(tt.tokenAmount ?? 0)) || 0;
         if (amount <= 0) continue;
         transferEvents.push({
@@ -289,7 +301,8 @@ export async function getAggregateTradePnL(
     const day = Math.floor((ev.ts || 0) / 86400) * 86400;
     if (!day) continue;
     const key = `${ev.mint}:${day}`;
-    if (!uniqueQueries.has(key)) uniqueQueries.set(key, { mint: ev.mint, ts: day });
+    if (!uniqueQueries.has(key))
+      uniqueQueries.set(key, { mint: ev.mint, ts: day });
   }
   const priceLookups = await Promise.all(
     Array.from(uniqueQueries.entries()).map(async ([key, q]) => {
@@ -309,7 +322,8 @@ export async function getAggregateTradePnL(
     const cost = ev.amount * price;
     bumpMint(ev.mint, cost, ev.amount, 1, "transfer");
     const wIdx = wallets.indexOf(ev.wallet);
-    if (wIdx !== -1) bumpWalletMint(wIdx, ev.mint, cost, ev.amount, 1, "transfer");
+    if (wIdx !== -1)
+      bumpWalletMint(wIdx, ev.mint, cost, ev.amount, 1, "transfer");
   }
 
   await Promise.all(
@@ -395,8 +409,7 @@ export async function getAggregateTradePnL(
       const costBasis = ownPart.costBasis + hhPart.costBasis;
       const attribution: "wallet" | "household" =
         hhPart.coveredAmount > 0 ? "household" : "wallet";
-      const sourcesSet =
-        hhPart.coveredAmount > 0 ? hh!.sources : own!.sources;
+      const sourcesSet = hhPart.coveredAmount > 0 ? hh!.sources : own!.sources;
       const perTokenCost = costBasis / coveredAmount;
       const currentPrice = t.price || hh?.price || 0;
       const currentValue = bal * currentPrice;
@@ -485,11 +498,13 @@ export async function getAggregateTradePnL(
     if (STABLECOIN_MINTS.has(ev.mint) || !ev.ts) continue;
     const day = Math.floor(ev.ts / 86400) * 86400;
     const key = `${ev.mint}:${day}`;
-    if (!extPriceQueries.has(key)) extPriceQueries.set(key, { mint: ev.mint, ts: day });
+    if (!extPriceQueries.has(key))
+      extPriceQueries.set(key, { mint: ev.mint, ts: day });
   }
   const extPriceLookups = await Promise.all(
     Array.from(extPriceQueries.entries()).map(
-      async ([key, q]) => [key, await getHistoricalPrice(q.mint, q.ts)] as const,
+      async ([key, q]) =>
+        [key, await getHistoricalPrice(q.mint, q.ts)] as const,
     ),
   );
   const extPriceMap = new Map<string, number | null>(extPriceLookups);

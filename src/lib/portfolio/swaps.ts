@@ -1,4 +1,8 @@
-import type { BuyAggregate, CashEvent, SellAggregate } from "@/lib/portfolio/types";
+import type {
+  BuyAggregate,
+  CashEvent,
+  SellAggregate,
+} from "@/lib/portfolio/types";
 
 export const STABLECOIN_MINTS = new Set([
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -58,7 +62,11 @@ function rawToFloat(rawTokenAmount: RawTokenAmount | undefined): number {
   return raw / 10 ** decimals;
 }
 
-function cashMintUsd(mint: string, amount: number, solPriceUsd: number): number {
+function cashMintUsd(
+  mint: string,
+  amount: number,
+  solPriceUsd: number,
+): number {
   if (STABLECOIN_MINTS.has(mint)) return amount;
   if (mint === SOL_MINT) return amount * (solPriceUsd || 0);
   return 0;
@@ -74,7 +82,7 @@ export function synthesizeSwapFromTransfers(
   tx: HeliusTx,
   wallet: string,
 ): SwapEvent | null {
-  if (!tx || tx.type !== "SWAP") return null;
+  if (tx?.type !== "SWAP") return null;
   if (tx.events?.swap) return null;
   const synth: SwapEvent = {
     tokenInputs: [],
@@ -208,7 +216,11 @@ export function aggregateSwapEvents(
         });
       }
     }
-    if (tokensOut.length > 0 && cashOutUsd > 0 && distinctMints(tokensOut) > 1) {
+    if (
+      tokensOut.length > 0 &&
+      cashOutUsd > 0 &&
+      distinctMints(tokensOut) > 1
+    ) {
       unpricedSwaps += 1;
     } else if (tokensOut.length > 0 && cashOutUsd > 0) {
       const total = tokensOut.reduce((s, x) => s + x.amount, 0) || 1;

@@ -6,9 +6,13 @@ const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export const walletsBodySchema = z.object({
   wallets: z
-    .array(z.string().regex(BASE58_RE, "invalid Solana address"))
-    .min(1)
-    .max(MAX_WALLETS_PER_REQUEST)
+    .array(z.string().regex(BASE58_RE, { error: "invalid Solana address" }), {
+      error: "wallets must be an array of Solana addresses",
+    })
+    .min(1, { error: "wallets must contain at least 1 address" })
+    .max(MAX_WALLETS_PER_REQUEST, {
+      error: `wallets must contain at most ${MAX_WALLETS_PER_REQUEST} addresses`,
+    })
     .transform((ws) => Array.from(new Set(ws))),
 });
 
@@ -37,7 +41,11 @@ export async function parseWalletsBody(
   | { ok: false; error: string; status: 400 | 429 }
 > {
   if (!takeRequestToken()) {
-    return { ok: false, error: "Rate limit exceeded, retry shortly.", status: 429 };
+    return {
+      ok: false,
+      error: "Rate limit exceeded, retry shortly.",
+      status: 429,
+    };
   }
   let payload: unknown;
   try {
@@ -54,6 +62,7 @@ export async function parseWalletsBody(
       status: 400,
     };
   }
-  const { wallets, ...rest } = parsed.data as WalletsBody & Record<string, unknown>;
+  const { wallets, ...rest } = parsed.data as WalletsBody &
+    Record<string, unknown>;
   return { ok: true, wallets, body: rest };
 }

@@ -1,5 +1,7 @@
 # Rollback
 
+**Deploy gating** — `Portfolio Deploy` runs only after the `CI` workflow succeeds on `main` (typecheck, lint, tests, build, image builds, container smoke). A red CI blocks the release; fix forward and push. To force a deploy of the current `main` regardless, trigger `Portfolio Deploy` manually via `workflow_dispatch`.
+
 **Infrastructure ordering** — apply `terraform/envs/prd` before pushing a deploy that depends on it. The deploy workflow's migration job attaches VPC settings only once the terraform-created subnet exists; deploying network-dependent changes before the apply blocks the release at the migration step. After an apply, verify with a deploy (or workflow re-run) and confirm the smoke gate passes.
 
 **Service** — route traffic back to a previous Cloud Run revision (no rebuild):

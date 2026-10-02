@@ -11,7 +11,10 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   const parsed = await parseWalletsBody(request);
   if (!parsed.ok) {
-    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+    return NextResponse.json(
+      { error: parsed.error },
+      { status: parsed.status },
+    );
   }
   try {
     const holdings = await getPortfolioHoldings(parsed.wallets);

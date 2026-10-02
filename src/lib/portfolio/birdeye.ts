@@ -1,7 +1,11 @@
 import { TtlCache } from "@/lib/portfolio/cache";
 import { fetchJSON } from "@/lib/portfolio/fetch-json";
 import { SOL_MINT } from "@/lib/portfolio/swaps";
-import type { HiddenReason, Holdings, TokenHolding } from "@/lib/portfolio/types";
+import type {
+  HiddenReason,
+  Holdings,
+  TokenHolding,
+} from "@/lib/portfolio/types";
 
 const NATIVE_SOL = "11111111111111111111111111111111";
 
@@ -156,7 +160,11 @@ export async function getPriceSeries(
         { headers: birdeyeHeaders() },
       );
       for (const item of data?.data?.items || []) {
-        if (typeof item.unixTime === "number" && typeof item.value === "number" && item.value > 0) {
+        if (
+          typeof item.unixTime === "number" &&
+          typeof item.value === "number" &&
+          item.value > 0
+        ) {
           out.set(Math.floor(item.unixTime / 86_400) * 86_400, item.value);
         }
       }

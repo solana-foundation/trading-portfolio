@@ -228,7 +228,12 @@ async function syncWalletLocked(
 
       const fromDay = days[0].day;
       const toDay = days[days.length - 1].day;
-      const prices = await pricesFor(client, Array.from(priced), fromDay, toDay);
+      const prices = await pricesFor(
+        client,
+        Array.from(priced),
+        fromDay,
+        toDay,
+      );
 
       const values: string[] = [];
       const params: unknown[] = [wallet];
