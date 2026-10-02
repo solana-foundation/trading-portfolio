@@ -26,6 +26,7 @@ const CANONICAL_MINTS: Record<string, string> = {
 
 const DUST_THRESHOLD_USD = 0.01;
 const BIRDEYE_CONCURRENCY = 8;
+const TOKEN_LIST_CONCURRENCY = 2 * MAX_WALLETS_PER_REQUEST;
 const TOKEN_LIST_ATTEMPT_TIMEOUT_MS = 20_000;
 const TOKEN_LIST_BUDGET_MS = 40_000;
 const NEGATIVE_TTL_MS = 30 * 60 * 1000;
@@ -43,7 +44,7 @@ type TokenListItem = {
 export type TokenMeta = { symbol: string; icon?: string };
 
 const birdeyeGate = createLimiter(BIRDEYE_CONCURRENCY);
-const tokenListGate = createLimiter(MAX_WALLETS_PER_REQUEST);
+const tokenListGate = createLimiter(TOKEN_LIST_CONCURRENCY);
 const tokenListCache = new TtlCache<TokenListItem[]>(1_000, 2 * 60 * 1000);
 const histPriceCache = new TtlCache<number | null>(10_000, WEEK_MS);
 const tokenMetaCache = new TtlCache<TokenMeta | null>(5_000, WEEK_MS);
