@@ -2,19 +2,28 @@ import type { PoolClient } from "pg";
 import {
   getHoldings,
   getNetWorthHistory,
-  getPriceSeries,
+  getPriceSeriesUntil,
   getRawBalances,
+  isBirdeyeRefusal,
+  type PriceSeries,
 } from "@/lib/portfolio/birdeye";
+import { mapLimit } from "@/lib/portfolio/concurrency";
 import {
   DAY_SECONDS,
   floorDay,
   reconstructDailyBalances,
 } from "@/lib/portfolio/daily-balances";
 import { getPool } from "@/lib/portfolio/db";
+import { DeadlineError } from "@/lib/portfolio/deadline";
+import { describeError } from "@/lib/portfolio/errors";
 import { SOL_MINT, STABLECOIN_MINTS } from "@/lib/portfolio/swaps";
 import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 
 const STALE_AFTER_DAYS = 90;
+const LOCK_POLL_MS = 500;
+const REQUEST_DEADLINE_MS = 100_000;
+const SYNC_RESERVE_MS = 20_000;
+const WRITE_RESERVE_MS = 15_000;
 const MAX_PRICED_MINTS = 1000;
 const PRICE_FETCH_CONCURRENCY = 8;
 const VENDOR_WINDOW_DAYS = 90;
@@ -40,12 +49,85 @@ function isoDay(day: number): string {
   return new Date(day * 1000).toISOString().slice(0, 10);
 }
 
+type LockPool = { connect: () => Promise<PoolClient> };
+
+export async function acquireLockedClient(
+  pool: LockPool,
+  wallet: string,
+  deadline: number,
+): Promise<PoolClient> {
+  const gaveUp = () =>
+    new DeadlineError(
+      `waiting for the sync lock on ${wallet.slice(0, 4)}…`,
+      REQUEST_DEADLINE_MS,
+    );
+  for (;;) {
+    const client = await pool.connect();
+    if (Date.now() >= deadline) {
+      client.release();
+      throw gaveUp();
+    }
+    let locked = false;
+    try {
+      const r = await client.query(
+        "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+        [wallet],
+      );
+      locked = r.rows[0]?.locked === true;
+    } catch (e) {
+      client.release(true);
+      throw e;
+    }
+    if (locked) {
+      if (Date.now() < deadline) return client;
+      let lockStateUnknown = false;
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
+        .catch(() => {
+          lockStateUnknown = true;
+        });
+      client.release(lockStateUnknown);
+      throw gaveUp();
+    }
+    client.release();
+    if (Date.now() >= deadline) throw gaveUp();
+    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+  }
+}
+
+export async function withTransaction<T>(
+  client: Pick<PoolClient, "query">,
+  fn: () => Promise<T>,
+): Promise<T> {
+  await client.query("BEGIN");
+  try {
+    const result = await fn();
+    await client.query("COMMIT");
+    return result;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  }
+}
+
+export function seriesOrSkip(
+  mint: string,
+  fromTs: number,
+  toTs: number,
+  deadline: number,
+  fetchSeries: typeof getPriceSeriesUntil = getPriceSeriesUntil,
+): Promise<PriceSeries> | null {
+  if (Date.now() >= deadline) return null;
+  return fetchSeries(mint, fromTs, toTs, deadline);
+}
+
 async function pricesFor(
   client: PoolClient,
   mints: string[],
   fromDay: number,
   toDay: number,
-): Promise<Map<string, Map<number, number>>> {
+  deadline: number,
+): Promise<{ prices: Map<string, Map<number, number>>; cutShort: boolean }> {
   const result = new Map<string, Map<number, number>>();
   const lookup: string[] = [];
   for (const mint of mints) {
@@ -81,59 +163,59 @@ async function pricesFor(
   }
 
   const INSERT_CHUNK = 5000;
-  const FETCH_WAVE = 32;
-  for (let w = 0; w < needFetch.length; w += FETCH_WAVE) {
-    const wave = needFetch.slice(w, w + FETCH_WAVE);
-    const seriesByMint = new Map<
-      string,
-      Awaited<ReturnType<typeof getPriceSeries>>
-    >();
-    let next = 0;
-    async function fetchWorker(): Promise<void> {
-      while (next < wave.length) {
-        const mint = wave[next++];
-        seriesByMint.set(
-          mint,
-          await getPriceSeries(mint, fromDay, toDay + DAY_SECONDS - 1),
-        );
-      }
-    }
-    await Promise.all(
-      Array.from(
-        { length: Math.min(PRICE_FETCH_CONCURRENCY, wave.length) },
-        () => fetchWorker(),
-      ),
+  let cutShort = false;
+  let refused = false;
+  const series = await mapLimit(needFetch, PRICE_FETCH_CONCURRENCY, (mint) => {
+    const pending = seriesOrSkip(
+      mint,
+      fromDay,
+      toDay + DAY_SECONDS - 1,
+      deadline,
     );
-
-    const newRows: Array<[string, number, number]> = [];
-    for (const mint of wave) {
-      const known = result.get(mint);
-      const fetched = seriesByMint.get(mint);
-      if (!known || !fetched) continue;
-      for (const [d, p] of fetched) {
-        if (known.has(d) || d < fromDay || d > toDay) continue;
-        known.set(d, p);
-        newRows.push([mint, d, p]);
-      }
+    if (!pending) {
+      cutShort = true;
+      return Promise.resolve(new Map<number, number>());
     }
-    for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
-      const chunk = newRows.slice(start, start + INSERT_CHUNK);
-      const values: string[] = [];
-      const params: unknown[] = [];
-      for (const [mint, d, p] of chunk) {
-        params.push(mint, d, p);
-        values.push(
-          `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
-        );
-      }
-      await client.query(
-        `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
-         ON CONFLICT (mint, day) DO NOTHING`,
-        params,
+    return pending.then(
+      (fetched) => {
+        if (!fetched.complete) cutShort = true;
+        return fetched.series;
+      },
+      (e: unknown) => {
+        if (!isBirdeyeRefusal(e)) throw e;
+        refused = true;
+        console.warn(`portfolio: ${describeError(e)}`);
+        return new Map<number, number>();
+      },
+    );
+  });
+  const newRows: Array<[string, number, number]> = [];
+  needFetch.forEach((mint, i) => {
+    const known = result.get(mint);
+    if (!known) return;
+    for (const [d, p] of series[i]) {
+      if (known.has(d) || d < fromDay || d > toDay) continue;
+      known.set(d, p);
+      newRows.push([mint, d, p]);
+    }
+  });
+  for (let start = 0; start < newRows.length; start += INSERT_CHUNK) {
+    const chunk = newRows.slice(start, start + INSERT_CHUNK);
+    const values: string[] = [];
+    const params: unknown[] = [];
+    for (const [mint, d, p] of chunk) {
+      params.push(mint, d, p);
+      values.push(
+        `($${params.length - 2}, to_timestamp($${params.length - 1})::date, $${params.length})`,
       );
     }
+    await client.query(
+      `INSERT INTO price_daily (mint, day, price_usd) VALUES ${values.join(",")}
+       ON CONFLICT (mint, day) DO NOTHING`,
+      params,
+    );
   }
-  return result;
+  return { prices: result, cutShort: cutShort || refused };
 }
 
 async function cleanupStale(): Promise<void> {
@@ -162,6 +244,7 @@ async function syncWalletLocked(
   client: PoolClient,
   wallet: string,
   todayDay: number,
+  deadline: number,
 ): Promise<SyncOutcome> {
   const sync = await client.query(
     `INSERT INTO wallet_sync (wallet) VALUES ($1)
@@ -214,6 +297,8 @@ async function syncWalletLocked(
         (d) => d.day > storedMaxDay || incompleteDaySet.has(d.day),
       );
     }
+    const dayValues: string[] = [];
+    const dayParams: unknown[] = [wallet];
     if (days.length > 0) {
       const mintValue = new Map<string, number>();
       for (const t of holdings.tokens) mintValue.set(t.address, t.value);
@@ -228,15 +313,15 @@ async function syncWalletLocked(
 
       const fromDay = days[0].day;
       const toDay = days[days.length - 1].day;
-      const prices = await pricesFor(
+      const { prices, cutShort } = await pricesFor(
         client,
         Array.from(priced),
         fromDay,
         toDay,
+        deadline - WRITE_RESERVE_MS,
       );
+      if (cutShort) partial = true;
 
-      const values: string[] = [];
-      const params: unknown[] = [wallet];
       for (const d of days) {
         let value = 0;
         let complete = true;
@@ -249,34 +334,36 @@ async function syncWalletLocked(
           }
           value += amount * p;
         }
-        params.push(d.day, value, complete);
-        values.push(
-          `($1, to_timestamp($${params.length - 2})::date, $${params.length - 1}, 'engine', $${params.length})`,
+        dayParams.push(d.day, value, complete);
+        dayValues.push(
+          `($1, to_timestamp($${dayParams.length - 2})::date, $${dayParams.length - 1}, 'engine', $${dayParams.length})`,
         );
       }
-      if (values.length > 0) {
+    }
+    backfilledNow = !wasBackfilled;
+    await withTransaction(client, async () => {
+      if (dayValues.length > 0) {
         await client.query(
           `INSERT INTO wallet_value_daily (wallet, day, value_usd, source, complete)
-           VALUES ${values.join(",")}
+           VALUES ${dayValues.join(",")}
            ON CONFLICT (wallet, day) DO UPDATE
              SET value_usd = EXCLUDED.value_usd,
                  source = EXCLUDED.source,
                  complete = EXCLUDED.complete
            WHERE NOT wallet_value_daily.complete`,
-          params,
+          dayParams,
         );
       }
-    }
-    backfilledNow = !wasBackfilled;
-    await client.query(
-      `UPDATE wallet_sync
-          SET backfilled = true,
-              truncated = $2,
-              genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
-              updated_at = now()
-        WHERE wallet = $1`,
-      [wallet, truncated],
-    );
+      await client.query(
+        `UPDATE wallet_sync
+            SET backfilled = true,
+                truncated = $2,
+                genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
+                updated_at = now()
+          WHERE wallet = $1`,
+        [wallet, truncated],
+      );
+    });
   }
 
   if (truncated) {
@@ -307,19 +394,21 @@ async function syncWalletLocked(
           );
         }
         if (values.length > 0) {
-          await client.query(
-            `INSERT INTO wallet_value_daily (wallet, day, value_usd, source, complete)
-             VALUES ${values.join(",")}
-             ON CONFLICT (wallet, day) DO NOTHING`,
-            params,
-          );
-          await client.query(
-            `UPDATE wallet_sync
-                SET genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
-                    updated_at = now()
-              WHERE wallet = $1`,
-            [wallet],
-          );
+          await withTransaction(client, async () => {
+            await client.query(
+              `INSERT INTO wallet_value_daily (wallet, day, value_usd, source, complete)
+               VALUES ${values.join(",")}
+               ON CONFLICT (wallet, day) DO NOTHING`,
+              params,
+            );
+            await client.query(
+              `UPDATE wallet_sync
+                  SET genesis_day = (SELECT min(day) FROM wallet_value_daily WHERE wallet = $1),
+                      updated_at = now()
+                WHERE wallet = $1`,
+              [wallet],
+            );
+          });
         }
       }
     }
@@ -349,30 +438,72 @@ async function syncWalletLocked(
   };
 }
 
-async function syncWallet(
+async function syncWalletExclusive(
   wallet: string,
   todayDay: number,
+  deadline: number,
 ): Promise<SyncOutcome> {
-  const pool = getPool();
-  const client = await pool.connect();
+  const client = await acquireLockedClient(
+    getPool(),
+    wallet,
+    deadline - SYNC_RESERVE_MS,
+  );
+  let lockStateUnknown = false;
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext($1))", [wallet]);
-    try {
-      return await syncWalletLocked(client, wallet, todayDay);
-    } finally {
-      await client
-        .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
-        .catch(() => {});
-    }
+    return await syncWalletLocked(client, wallet, todayDay, deadline);
   } finally {
-    client.release();
+    await client
+      .query("SELECT pg_advisory_unlock(hashtext($1))", [wallet])
+      .catch(() => {
+        lockStateUnknown = true;
+      });
+    client.release(lockStateUnknown);
   }
+}
+
+type InFlight<T> = { day: number; promise: Promise<T> };
+
+export function joinOrQueue<T>(
+  inFlight: Map<string, InFlight<T>>,
+  key: string,
+  day: number,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = inFlight.get(key);
+  if (previous && previous.day === day) return previous.promise;
+  const settled = previous
+    ? previous.promise.then(
+        () => undefined,
+        () => undefined,
+      )
+    : Promise.resolve();
+  const entry: InFlight<T> = {
+    day,
+    promise: settled.then(run).finally(() => {
+      if (inFlight.get(key) === entry) inFlight.delete(key);
+    }),
+  };
+  inFlight.set(key, entry);
+  return entry.promise;
+}
+
+const syncInFlight = new Map<string, InFlight<SyncOutcome>>();
+
+function syncWallet(
+  wallet: string,
+  todayDay: number,
+  deadline: number,
+): Promise<SyncOutcome> {
+  return joinOrQueue(syncInFlight, wallet, todayDay, () =>
+    syncWalletExclusive(wallet, todayDay, deadline),
+  );
 }
 
 export async function getValueHistory(
   wallets: string[],
 ): Promise<ValueHistoryResult> {
   const todayDay = floorDay(Math.floor(Date.now() / 1000));
+  const deadline = Date.now() + REQUEST_DEADLINE_MS;
   const pool = getPool();
 
   const metas: Record<string, WalletSeriesMeta> = {};
@@ -380,13 +511,25 @@ export async function getValueHistory(
   let hasUnpricedDays = false;
   let todayValueUsd = 0;
   for (const wallet of wallets) {
-    const r = await syncWallet(wallet, todayDay);
+    if (Date.now() + SYNC_RESERVE_MS >= deadline) {
+      throw new DeadlineError(
+        `value-history before syncing ${wallet.slice(0, 4)}…`,
+        REQUEST_DEADLINE_MS,
+      );
+    }
+    const r = await syncWallet(wallet, todayDay, deadline);
     metas[wallet] = r.meta;
     partial = partial || r.partial || r.meta.truncated;
     hasUnpricedDays = hasUnpricedDays || r.meta.incompleteDays > 0;
     todayValueUsd += r.todayValueUsd;
   }
 
+  if (Date.now() >= deadline) {
+    throw new DeadlineError(
+      "value-history before reading the stored series",
+      REQUEST_DEADLINE_MS,
+    );
+  }
   const summed = await pool.query(
     `SELECT extract(epoch FROM day)::bigint AS day_ts, sum(value_usd) AS value
        FROM wallet_value_daily
@@ -400,7 +543,7 @@ export async function getValueHistory(
   }));
 
   void cleanupStale().catch((e) =>
-    console.error("portfolio: stale cleanup failed:", (e as Error).message),
+    console.error("portfolio: stale cleanup failed:", describeError(e)),
   );
 
   return { series, todayValueUsd, wallets: metas, partial, hasUnpricedDays };

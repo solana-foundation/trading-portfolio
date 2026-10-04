@@ -23,6 +23,7 @@ export type SwapEvent = {
   nativeOutput?: NativeSide | null;
   tokenInputs?: TokenSide[];
   tokenOutputs?: TokenSide[];
+  malformed?: boolean;
 };
 export type TokenTransfer = {
   fromUserAccount?: string;
@@ -54,11 +55,31 @@ export type WalletSwapEvents = {
 
 export type SolPriceAt = (ts: number) => number;
 
-function rawToFloat(rawTokenAmount: RawTokenAmount | undefined): number {
-  if (!rawTokenAmount) return 0;
-  const raw = Number.parseFloat(rawTokenAmount.tokenAmount);
-  const decimals = Number(rawTokenAmount.decimals) || 0;
-  if (!Number.isFinite(raw)) return 0;
+const MAX_DECIMALS = 255;
+
+export function txType(tx: HeliusTx | undefined): string | undefined {
+  return typeof tx?.type === "string" ? tx.type.toUpperCase() : undefined;
+}
+
+export function parseAmount(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const n =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string"
+        ? Number(raw.trim())
+        : Number.NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function rawToFloat(rawTokenAmount: RawTokenAmount | undefined): number | null {
+  if (!rawTokenAmount) return null;
+  const raw = parseAmount(rawTokenAmount.tokenAmount);
+  const decimals = parseAmount(rawTokenAmount.decimals);
+  if (raw === null || decimals === null) return null;
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > MAX_DECIMALS) {
+    return null;
+  }
   return raw / 10 ** decimals;
 }
 
@@ -82,7 +103,7 @@ export function synthesizeSwapFromTransfers(
   tx: HeliusTx,
   wallet: string,
 ): SwapEvent | null {
-  if (tx?.type !== "SWAP") return null;
+  if (txType(tx) !== "SWAP") return null;
   if (tx.events?.swap) return null;
   const synth: SwapEvent = {
     tokenInputs: [],
@@ -91,9 +112,17 @@ export function synthesizeSwapFromTransfers(
     nativeOutput: null,
   };
 
+  let malformed = false;
   for (const tt of tx.tokenTransfers || []) {
-    const amt = Number.parseFloat(String(tt.tokenAmount ?? 0)) || 0;
-    if (amt <= 0 || !tt.mint) continue;
+    const involved =
+      tt.fromUserAccount === wallet || tt.toUserAccount === wallet;
+    if (!involved || !tt.mint) continue;
+    const amt = parseAmount(tt.tokenAmount);
+    if (amt === null) {
+      malformed = true;
+      continue;
+    }
+    if (amt <= 0) continue;
     const fakeRaw: RawTokenAmount = { tokenAmount: String(amt), decimals: 0 };
     if (tt.fromUserAccount === wallet) {
       synth.tokenInputs?.push({
@@ -113,11 +142,19 @@ export function synthesizeSwapFromTransfers(
   let solOut = 0;
   let solIn = 0;
   for (const nt of tx.nativeTransfers || []) {
-    const lam = Number.parseFloat(String(nt.amount ?? 0)) || 0;
+    const involved =
+      nt.fromUserAccount === wallet || nt.toUserAccount === wallet;
+    if (!involved) continue;
+    const lam = parseAmount(nt.amount);
+    if (lam === null) {
+      malformed = true;
+      continue;
+    }
     if (lam <= 0) continue;
     if (nt.fromUserAccount === wallet) solOut += lam;
-    else if (nt.toUserAccount === wallet) solIn += lam;
+    else solIn += lam;
   }
+  if (malformed) return { ...synth, malformed: true };
   if (solOut >= FEE_THRESHOLD_LAMPORTS) {
     synth.nativeInput = { account: wallet, amount: String(solOut) };
   }
@@ -146,6 +183,10 @@ export function aggregateSwapEvents(
   for (const tx of txs) {
     const swap = tx?.events?.swap || synthesizeSwapFromTransfers(tx, wallet);
     if (!swap) continue;
+    if (swap.malformed) {
+      unpricedSwaps += 1;
+      continue;
+    }
     const ts = tx.timestamp || 0;
     const signature = tx.signature || null;
     const source = tx.source || null;
@@ -157,30 +198,45 @@ export function aggregateSwapEvents(
     const tokensOut: Array<{ mint: string; amount: number }> = [];
     let cashOutUsd = 0;
     const tokensIn: Array<{ mint: string; amount: number }> = [];
+    let malformed = false;
 
     if (swap.nativeInput?.account === wallet) {
-      const lam = Number.parseFloat(swap.nativeInput.amount || "0") || 0;
-      cashInUsd += (lam / 1e9) * (solPriceUsd || 0);
+      const lam = parseAmount(swap.nativeInput.amount);
+      if (lam === null) malformed = true;
+      else cashInUsd += (lam / 1e9) * (solPriceUsd || 0);
     }
     for (const input of swap.tokenInputs || []) {
       if (input.userAccount !== wallet) continue;
       const amt = rawToFloat(input.rawTokenAmount);
+      if (amt === null) {
+        malformed = true;
+        continue;
+      }
       if (amt <= 0) continue;
       const usd = cashUsd(input.mint, amt);
       if (usd > 0) cashInUsd += usd;
       else tokensOut.push({ mint: input.mint, amount: amt });
     }
     if (swap.nativeOutput?.account === wallet) {
-      const lam = Number.parseFloat(swap.nativeOutput.amount || "0") || 0;
-      cashOutUsd += (lam / 1e9) * (solPriceUsd || 0);
+      const lam = parseAmount(swap.nativeOutput.amount);
+      if (lam === null) malformed = true;
+      else cashOutUsd += (lam / 1e9) * (solPriceUsd || 0);
     }
     for (const output of swap.tokenOutputs || []) {
       if (output.userAccount !== wallet) continue;
       const amt = rawToFloat(output.rawTokenAmount);
+      if (amt === null) {
+        malformed = true;
+        continue;
+      }
       if (amt <= 0) continue;
       const usd = cashUsd(output.mint, amt);
       if (usd > 0) cashOutUsd += usd;
       else tokensIn.push({ mint: output.mint, amount: amt });
+    }
+    if (malformed) {
+      unpricedSwaps += 1;
+      continue;
     }
 
     if (tokensIn.length > 0 && cashInUsd > 0 && distinctMints(tokensIn) > 1) {

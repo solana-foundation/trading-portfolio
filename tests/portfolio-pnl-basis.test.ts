@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coveredCostBasis } from "@/lib/portfolio/pnl";
+import { aggregateCacheKey, coveredCostBasis } from "@/lib/portfolio/pnl";
 
 describe("coveredCostBasis", () => {
   it("uses weighted-average cost when balance is within tracked buys", () => {
@@ -48,5 +48,22 @@ describe("coveredCostBasis", () => {
       avgCostPerToken: 0,
       costBasis: 0,
     });
+  });
+});
+
+describe("aggregateCacheKey", () => {
+  const holdings = [
+    {
+      tokens: [{ address: "m", balance: 1, price: 2, value: 2 }],
+      totalValue: 2,
+      unpricedCount: 0,
+      unpricedMints: [],
+    },
+  ];
+  it("is stable across wallet order and distinct per net worth", () => {
+    const a = aggregateCacheKey(["w1", "w2"], holdings, 2);
+    expect(aggregateCacheKey(["w2", "w1"], holdings, 2)).toBe(a);
+    expect(aggregateCacheKey(["w1", "w2"], holdings, 3)).not.toBe(a);
+    expect(aggregateCacheKey(["w1", "w2"], holdings)).not.toBe(a);
   });
 });

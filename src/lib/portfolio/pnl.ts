@@ -1,16 +1,22 @@
 import { createHash } from "node:crypto";
 import {
   getHistoricalPrice,
+  getHistoricalPrices,
   getHoldings,
-  getTokenMeta,
+  getTokenMetas,
+  type VendorCounters,
 } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
+import { mapLimit } from "@/lib/portfolio/concurrency";
+import { MAX_WALLETS_PER_REQUEST } from "@/lib/portfolio/request";
 import type { HeliusTx } from "@/lib/portfolio/swaps";
 import {
   aggregateSwapEvents,
+  parseAmount,
   SOL_MINT,
   STABLECOIN_MINTS,
   synthesizeSwapFromTransfers,
+  txType,
 } from "@/lib/portfolio/swaps";
 import { fetchTransactions } from "@/lib/portfolio/tx-provider";
 import type {
@@ -23,6 +29,9 @@ import type {
 import { type Cashflow, computeXIRR } from "@/lib/portfolio/xirr";
 
 const resultCache = new TtlCache<TradePnLResult>(500, 5 * 60 * 1000);
+const vendorDegraded = new WeakSet<TradePnLResult>();
+const HOLDINGS_CONCURRENCY = MAX_WALLETS_PER_REQUEST;
+const TX_FETCH_CONCURRENCY = 4;
 
 export function tradeSortKey(t: TradeHistoryRow): string {
   return [t.signature || "", t.kind, t.wallet, t.mint].join("|");
@@ -94,14 +103,28 @@ type TransferEvent = {
 export async function getPortfolioHoldings(
   wallets: string[],
 ): Promise<Holdings[]> {
-  return Promise.all(wallets.map((w) => getHoldings(w)));
+  return mapLimit(wallets, HOLDINGS_CONCURRENCY, (w) => getHoldings(w));
 }
 
-export async function getAggregateTradePnL(
+async function solPricesByDay(
+  days: Iterable<number>,
+  counters: VendorCounters,
+): Promise<Map<number, number>> {
+  const queries = Array.from(days, (day) => ({ mint: SOL_MINT, ts: day }));
+  const prices = await getHistoricalPrices(queries, counters);
+  const out = new Map<number, number>();
+  for (const q of queries) {
+    const p = prices.get(`${SOL_MINT}:${q.ts}`);
+    if (p && p > 0) out.set(q.ts, p);
+  }
+  return out;
+}
+
+export function aggregateCacheKey(
   wallets: string[],
   holdings: Holdings[],
   netWorthUsd?: number,
-): Promise<TradePnLResult> {
+): string {
   const holdingsFp = createHash("sha1")
     .update(
       JSON.stringify(
@@ -111,35 +134,52 @@ export async function getAggregateTradePnL(
       ),
     )
     .digest("hex");
-  const cacheKey = `${[...wallets].sort().join(",")}:${holdingsFp}`;
-  const cached = resultCache.get(cacheKey);
-  if (cached) return cached;
+  return `${[...wallets].sort().join(",")}:${holdingsFp}:${netWorthUsd ?? ""}`;
+}
 
-  const txFetches = await Promise.all(wallets.map((w) => fetchTransactions(w)));
+export function getAggregateTradePnL(
+  wallets: string[],
+  holdings: Holdings[],
+  netWorthUsd?: number,
+): Promise<TradePnLResult> {
+  return resultCache.getOrFetch(
+    aggregateCacheKey(wallets, holdings, netWorthUsd),
+    () => computeAggregateTradePnL(wallets, holdings, netWorthUsd),
+    (result) => (vendorDegraded.has(result) ? 0 : undefined),
+  );
+}
+
+async function computeAggregateTradePnL(
+  wallets: string[],
+  holdings: Holdings[],
+  netWorthUsd?: number,
+): Promise<TradePnLResult> {
+  const counters: VendorCounters = { refused: 0 };
+  const txFetches = await mapLimit(wallets, TX_FETCH_CONCURRENCY, (w) =>
+    fetchTransactions(w),
+  );
   const txsPerWallet = txFetches.map((f) => f.txs);
   const historyTruncated = txFetches.some((f) => f.truncated);
   const householdSet = new Set(wallets);
 
   const currentSolPrice =
     deriveSolPriceFromHoldings(holdings) ||
-    (await getHistoricalPrice(SOL_MINT, Math.floor(Date.now() / 1000))) ||
+    (await getHistoricalPrice(
+      SOL_MINT,
+      Math.floor(Date.now() / 1000),
+      counters,
+    )) ||
     0;
   const swapDays = new Set<number>();
   for (const txs of txsPerWallet) {
     for (const tx of txs) {
       if (!tx.timestamp) continue;
-      if (tx.events?.swap || tx.type === "SWAP") {
+      if (tx.events?.swap || txType(tx) === "SWAP") {
         swapDays.add(Math.floor(tx.timestamp / 86400) * 86400);
       }
     }
   }
-  const solPriceByDay = new Map<number, number>();
-  await Promise.all(
-    Array.from(swapDays).map(async (day) => {
-      const p = await getHistoricalPrice(SOL_MINT, day);
-      if (p && p > 0) solPriceByDay.set(day, p);
-    }),
-  );
+  const solPriceByDay = await solPricesByDay(swapDays, counters);
   const todayDay = Math.floor(Date.now() / 1000 / 86400) * 86400;
   let solPriceFellBack = false;
   const solPriceAt = (ts: number) => {
@@ -162,6 +202,7 @@ export async function getAggregateTradePnL(
   let hasUnpriced =
     swapEventsPerWallet.some((x) => x.unpricedSwaps > 0) ||
     solPriceFellBack ||
+    currentSolPrice <= 0 ||
     holdings.some((h) => (h?.unpricedCount || 0) > 0);
 
   function bumpMint(
@@ -267,7 +308,8 @@ export async function getAggregateTradePnL(
     const w = wallets[i];
     const heldMints = heldMintsPerWallet[i];
     for (const tx of txsPerWallet[i]) {
-      if (tx.type && !TRANSFER_ALLOWED_TX_TYPES.has(tx.type)) continue;
+      const kind = txType(tx);
+      if (kind && !TRANSFER_ALLOWED_TX_TYPES.has(kind)) continue;
       const swap = tx?.events?.swap || synthesizeSwapFromTransfers(tx, w);
       const userIsSwapInput =
         swap &&
@@ -282,7 +324,11 @@ export async function getAggregateTradePnL(
         if (!heldMints.has(mint)) continue;
         if (tt.fromUserAccount && householdSet.has(tt.fromUserAccount))
           continue;
-        const amount = Number.parseFloat(String(tt.tokenAmount ?? 0)) || 0;
+        const amount = parseAmount(tt.tokenAmount);
+        if (amount === null) {
+          hasUnpriced = true;
+          continue;
+        }
         if (amount <= 0) continue;
         transferEvents.push({
           mint,
@@ -304,13 +350,10 @@ export async function getAggregateTradePnL(
     if (!uniqueQueries.has(key))
       uniqueQueries.set(key, { mint: ev.mint, ts: day });
   }
-  const priceLookups = await Promise.all(
-    Array.from(uniqueQueries.entries()).map(async ([key, q]) => {
-      const price = await getHistoricalPrice(q.mint, q.ts);
-      return [key, price] as const;
-    }),
+  const priceMap = await getHistoricalPrices(
+    Array.from(uniqueQueries.values()),
+    counters,
   );
-  const priceMap = new Map<string, number | null>(priceLookups);
 
   for (const ev of transferEvents) {
     const day = Math.floor((ev.ts || 0) / 86400) * 86400;
@@ -326,17 +369,17 @@ export async function getAggregateTradePnL(
       bumpWalletMint(wIdx, ev.mint, cost, ev.amount, 1, "transfer");
   }
 
-  await Promise.all(
-    Array.from(byMint.entries())
-      .filter(([, m]) => m.totalSpent > 0 && !m.symbol)
-      .map(async ([mint, m]) => {
-        const meta = await getTokenMeta(mint);
-        if (meta) {
-          m.symbol = meta.symbol;
-          if (!m.icon) m.icon = meta.icon;
-        }
-      }),
+  const unlabeled = Array.from(byMint.entries()).filter(
+    ([, m]) => m.totalSpent > 0 && !m.symbol,
   );
+  const metas = await getTokenMetas(unlabeled.map(([mint]) => mint));
+  for (const [mint, m] of unlabeled) {
+    const meta = metas.get(mint);
+    if (meta) {
+      m.symbol = meta.symbol;
+      if (!m.icon) m.icon = meta.icon;
+    }
+  }
 
   const perWallet: Record<string, TradePnLRow[]> = {};
   let totalPnL = 0;
@@ -453,11 +496,18 @@ export async function getAggregateTradePnL(
   for (let i = 0; i < wallets.length; i++) {
     const w = wallets[i];
     for (const tx of txsPerWallet[i]) {
-      if (tx.type && tx.type !== "TRANSFER") continue;
+      const kind = txType(tx);
+      if (kind && kind !== "TRANSFER") continue;
       const ts = tx.timestamp || 0;
       for (const tt of tx.tokenTransfers || []) {
-        const amt = Number.parseFloat(String(tt.tokenAmount ?? 0)) || 0;
-        if (amt <= 0 || !tt.mint) continue;
+        if (tt.toUserAccount !== w && tt.fromUserAccount !== w) continue;
+        if (!tt.mint) continue;
+        const amt = parseAmount(tt.tokenAmount);
+        if (amt === null) {
+          hasUnpriced = true;
+          continue;
+        }
+        if (amt <= 0) continue;
         if (
           tt.toUserAccount === w &&
           tt.fromUserAccount &&
@@ -473,7 +523,12 @@ export async function getAggregateTradePnL(
         }
       }
       for (const nt of tx.nativeTransfers || []) {
-        const lam = Number.parseFloat(String(nt.amount ?? 0)) || 0;
+        if (nt.toUserAccount !== w && nt.fromUserAccount !== w) continue;
+        const lam = parseAmount(nt.amount);
+        if (lam === null) {
+          hasUnpriced = true;
+          continue;
+        }
         const sol = lam / 1e9;
         if (sol <= 0) continue;
         if (
@@ -501,13 +556,10 @@ export async function getAggregateTradePnL(
     if (!extPriceQueries.has(key))
       extPriceQueries.set(key, { mint: ev.mint, ts: day });
   }
-  const extPriceLookups = await Promise.all(
-    Array.from(extPriceQueries.entries()).map(
-      async ([key, q]) =>
-        [key, await getHistoricalPrice(q.mint, q.ts)] as const,
-    ),
+  const extPriceMap = await getHistoricalPrices(
+    Array.from(extPriceQueries.values()),
+    counters,
   );
-  const extPriceMap = new Map<string, number | null>(extPriceLookups);
 
   const cashflowEvents: Cashflow[] = [];
   let unpricedCashflowCount = 0;
@@ -560,13 +612,7 @@ export async function getAggregateTradePnL(
     const solQueries = new Set(
       cashflowEvents.map((c) => Math.floor(c.ts / 86400) * 86400),
     );
-    const benchSolPriceByDay = new Map<number, number>();
-    await Promise.all(
-      Array.from(solQueries).map(async (day) => {
-        const p = await getHistoricalPrice(SOL_MINT, day);
-        if (p && p > 0) benchSolPriceByDay.set(day, p);
-      }),
-    );
+    const benchSolPriceByDay = await solPricesByDay(solQueries, counters);
     let netSol = 0;
     const bcfs: Cashflow[] = [];
     for (const c of cashflowEvents) {
@@ -682,7 +728,7 @@ export async function getAggregateTradePnL(
     hasUnpriced,
     historyTruncated,
   };
-  resultCache.set(cacheKey, result);
+  if (counters.refused > 0) vendorDegraded.add(result);
   return result;
 }
 
