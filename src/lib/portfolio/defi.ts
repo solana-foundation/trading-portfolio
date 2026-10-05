@@ -95,7 +95,6 @@ const INFRA_PROGRAMS = new Set([
   ...OWNER_ACCOUNT_PROTOCOLS.map((p) => p.program),
   ...POSITION_NFT_PROTOCOLS.map((p) => p.program),
   KLEND,
-  PHOENIX,
   "11111111111111111111111111111111",
   "ComputeBudget111111111111111111111111111111",
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
@@ -532,16 +531,13 @@ async function phoenixPerps(
       }),
     }),
   );
-  const spotByPda = new Map<
-    number,
-    Map<number, PerpAccount["spotCollateral"]>
-  >();
-  for (const pdaIndex of new Set(traders.map((t) => t.view.traderPdaIndex))) {
-    spotByPda.set(
-      pdaIndex,
-      await phoenixSpotCollateral(wallet, pdaIndex, signal),
-    );
-  }
+  const pdaIndexes = [...new Set(traders.map((t) => t.view.traderPdaIndex))];
+  const spots = await mapLimit(pdaIndexes, PHOENIX_CONCURRENCY, (pdaIndex) =>
+    phoenixSpotCollateral(wallet, pdaIndex, signal),
+  );
+  const spotByPda = new Map(
+    pdaIndexes.map((pdaIndex, i) => [pdaIndex, spots[i]]),
+  );
   const rows: DefiPositionRow[] = [];
   for (const { traderKey, view } of traders) {
     if (view.authority !== wallet) {
@@ -552,8 +548,17 @@ async function phoenixPerps(
         message: `phoenix trader ${traderKey} reports a different authority`,
       });
     }
-    const spotCollateral =
-      spotByPda.get(view.traderPdaIndex)?.get(view.traderSubaccountIndex) || [];
+    const spotCollateral = spotByPda
+      .get(view.traderPdaIndex)
+      ?.get(view.traderSubaccountIndex);
+    if (!spotCollateral) {
+      throw new VendorError({
+        vendor: "phoenix",
+        kind: "shape",
+        path: "/v1/trader/state",
+        message: `phoenix state omits subaccount ${view.traderSubaccountIndex} of trader ${traderKey}`,
+      });
+    }
     if (view.riskState === PHOENIX_EMPTY && spotCollateral.length === 0) {
       continue;
     }
@@ -624,7 +629,7 @@ async function unknownInteractions(
     .slice(0, 8)
     .map(([program, txCount]) => ({
       wallet,
-      protocol: "unknown",
+      protocol: program === PHOENIX ? "phoenix" : "unknown",
       type: "interaction",
       mint: null,
       symbol: null,
@@ -695,6 +700,14 @@ async function scanWallet(wallet: string): Promise<WalletScan> {
   for (const outcome of outcomes) {
     if (outcome.rows) rows.push(...outcome.rows);
     if (outcome.degraded) failed.push({ wallet, source: outcome.source });
+  }
+  if (rows.some((r) => r.type === "perp-account" && r.protocol === "phoenix")) {
+    return {
+      rows: rows.filter(
+        (r) => !(r.type === "interaction" && r.programId === PHOENIX),
+      ),
+      failed,
+    };
   }
   return { rows, failed };
 }

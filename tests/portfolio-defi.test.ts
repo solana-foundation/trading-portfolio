@@ -7,7 +7,8 @@ const WHIRLPOOL = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
 const NFT_A = "NftA11111111111111111111111111111111111111";
 const NFT_B = "NftB11111111111111111111111111111111111111";
 const PHOENIX = "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih";
-const PHOENIX_API = "https://perp-api.phoenix.trade";
+const PHOENIX_HOST = "perp-api.phoenix.trade";
+const PHOENIX_API = `https://${PHOENIX_HOST}`;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -512,11 +513,128 @@ describe("getDefiPositions", () => {
     ]);
   });
 
+  it("degrades Phoenix when the state snapshot omits a discovered subaccount", async () => {
+    const w = wallet();
+    install(
+      phoenix(
+        w,
+        {
+          trader0: traderView(w, 0, {
+            collateralBalance: usd(5),
+            portfolioValue: usd(5),
+            riskState: "healthy",
+          }),
+          trader3: traderView(w, 3, {
+            collateralBalance: usd(1),
+            portfolioValue: usd(90),
+            riskState: "healthy",
+          }),
+        },
+        traderState([{ subaccountIndex: 0 }]),
+      ),
+    );
+    const result = await getDefiPositions([w]);
+    expect(result.failed).toEqual([{ wallet: w, source: "phoenix" }]);
+    expect(result.positions).toEqual([]);
+  });
+
+  it("reads the state of every Phoenix PDA index concurrently", async () => {
+    const w = wallet();
+    const base = phoenix(
+      w,
+      {
+        trader0: traderView(w, 0, {
+          collateralBalance: usd(5),
+          portfolioValue: usd(5),
+          riskState: "healthy",
+        }),
+        trader1: traderView(w, 0, {
+          traderPdaIndex: 1,
+          collateralBalance: usd(7),
+          portfolioValue: usd(7),
+          riskState: "healthy",
+        }),
+      },
+      traderState([{ subaccountIndex: 0 }]),
+    );
+    const pending: Array<() => void> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/v1/trader/state/")) {
+        await new Promise<void>((resolve) => pending.push(resolve));
+      }
+      const res = base(url, parseRpc(init));
+      if (res) return res;
+      if (url.startsWith("https://api.helius.xyz/")) return json([]);
+      return json({
+        result:
+          parseRpc(init)?.method === "getProgramAccounts" ? [] : { value: [] },
+      });
+    });
+    const p = getDefiPositions([w]);
+    await flush();
+    await flush();
+    expect(pending).toHaveLength(2);
+    for (const release of pending) release();
+    const result = await p;
+    expect(result.positions.map((r) => r.valueUsd)).toEqual([7, 5]);
+    expect(
+      fetchMock.mock.calls
+        .map((c) => String(c[0]))
+        .filter((u) => u.includes("/v1/trader/state/"))
+        .map((u) => new URL(u).searchParams.get("traderPdaIndex"))
+        .sort(),
+    ).toEqual(["0", "1"]);
+  });
+
+  it("keeps Phoenix interaction evidence only when no account is valued", async () => {
+    const txs = [
+      { instructions: [{ programId: PHOENIX }, { programId: PHOENIX }] },
+    ];
+    const idle = wallet();
+    install((url) =>
+      url.startsWith("https://api.helius.xyz/") ? json(txs) : undefined,
+    );
+    const without = await getDefiPositions([idle]);
+    expect(without.positions).toEqual([
+      {
+        wallet: idle,
+        protocol: "phoenix",
+        type: "interaction",
+        mint: null,
+        symbol: null,
+        valueUsd: null,
+        count: 2,
+        programId: PHOENIX,
+      },
+    ]);
+
+    const active = wallet();
+    const base = phoenix(
+      active,
+      {
+        trader0: traderView(active, 0, {
+          collateralBalance: usd(5),
+          portfolioValue: usd(5),
+          riskState: "healthy",
+        }),
+      },
+      traderState([{ subaccountIndex: 0 }]),
+    );
+    install((url, rpc) =>
+      url.startsWith("https://api.helius.xyz/") ? json(txs) : base(url, rpc),
+    );
+    const withAccount = await getDefiPositions([active]);
+    expect(withAccount.positions.map((r) => r.type)).toEqual(["perp-account"]);
+  });
+
   it("makes no Phoenix API call for a wallet without trader accounts", async () => {
     install(() => undefined);
     await getDefiPositions([wallet()]);
     expect(
-      fetchMock.mock.calls.some((c) => String(c[0]).startsWith(PHOENIX_API)),
+      fetchMock.mock.calls.some(
+        (c) => new URL(String(c[0])).host === PHOENIX_HOST,
+      ),
     ).toBe(false);
   });
 

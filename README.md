@@ -213,7 +213,9 @@ account holding spot collateral such as SOL reports `valueUsd: null`
 with the balances under `spotCollateral`, because Phoenix's equity
 figure counts that collateral at a margin haircut. If any trader account
 cannot be read, the whole `phoenix` source is listed in `failed` rather
-than returning some of the wallet's accounts.
+than returning some of the wallet's accounts. A wallet that has
+transacted with Phoenix but has no valued account keeps an `interaction`
+row with `protocol: "phoenix"`.
 
 ### `POST /api/portfolio/value-history`
 
