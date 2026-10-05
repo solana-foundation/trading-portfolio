@@ -7,6 +7,7 @@ const REGISTRY = [
   { name: "raydium-clmm", program: "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", kind: "position-nft", mintOffset: 9 },
   { name: "kamino-lend", program: "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD", kind: "owner-account", ownerOffset: 64 },
   { name: "kamino-farms", program: "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr", kind: "owner-account", ownerOffset: 48 },
+  { name: "phoenix", program: "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih", kind: "owner-account", ownerOffset: 56 },
   { name: "drift", program: "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH", kind: "owner-account", ownerOffset: 8 },
   { name: "marginfi-v2", program: "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA", kind: "owner-account", ownerOffset: 40 },
   { name: "solend", program: "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo", kind: "owner-account", ownerOffset: 42 },

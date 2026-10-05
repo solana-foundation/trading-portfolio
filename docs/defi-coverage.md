@@ -25,6 +25,7 @@ leaves, and how `scripts/defi-gaps.mjs` detects it.
 | Raydium CLMM | `CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK` | position-nft | mintOffset 9 | verified live |
 | Kamino Lend | `KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD` | owner-account | ownerOffset 64 | verified live |
 | Kamino Farms | `FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr` | owner-account | ownerOffset 48 | verified live |
+| Phoenix perps | `EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih` | owner-account | ownerOffset 56 | verified live, valued via `perp-api.phoenix.trade` |
 | Drift | `dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH` | owner-account | ownerOffset 8 | registry |
 | marginfi v2 | `MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA` | owner-account | ownerOffset 40 | verified live |
 | Solend/Save | `So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo` | owner-account | ownerOffset 42 | verified live |
