@@ -112,5 +112,6 @@
   },
   "notification_settings": {
     "receiver": "alerts-trading"
-  }
+  },
+  "isPaused": true
 }
