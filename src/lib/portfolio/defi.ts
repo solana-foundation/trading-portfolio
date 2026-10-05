@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getTokenMetas } from "@/lib/portfolio/birdeye";
 import { TtlCache } from "@/lib/portfolio/cache";
-import { mapLimit } from "@/lib/portfolio/concurrency";
+import { createLimiter, mapLimit } from "@/lib/portfolio/concurrency";
 import {
   describeError,
   ProviderAuthError,
@@ -15,7 +15,7 @@ import {
   isAuthError,
   rpcResponse,
 } from "@/lib/portfolio/tx-provider";
-import type { DefiPositionRow } from "@/lib/portfolio/types";
+import type { DefiPositionRow, PerpAccount } from "@/lib/portfolio/types";
 
 const KLEND = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD";
 const SF = 2 ** 60;
@@ -29,6 +29,15 @@ const MIN_POSITION_USD = 0.01;
 const WALLET_CONCURRENCY = 4;
 const NFT_PROBE_CONCURRENCY = 5;
 const ACCOUNTS_PER_LOOKUP = 100;
+
+const PHOENIX = "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih";
+const PHOENIX_API = "https://perp-api.phoenix.trade";
+const PHOENIX_TRADER_DISCRIMINATOR = "7vSQjpi9Yx8";
+const PHOENIX_AUTHORITY_OFFSET = 56;
+const PHOENIX_CONCURRENCY = 8;
+const PHOENIX_EMPTY = "zeroCollateralNoPositions";
+
+const phoenixGate = createLimiter(PHOENIX_CONCURRENCY);
 
 const OWNER_ACCOUNT_PROTOCOLS = [
   {
@@ -404,6 +413,193 @@ async function nftPositions(
   return { rows, degraded: unprobed.size > 0 };
 }
 
+const phoenixAmount = z
+  .looseObject({
+    value: z.union([z.number(), z.string()]),
+    decimals: z.number().int().min(0).max(30),
+  })
+  .transform((a) => Number(a.value) / 10 ** a.decimals)
+  .pipe(z.number());
+
+const phoenixTraderSchema = z.looseObject({
+  authority: z.string(),
+  traderPdaIndex: z.number().int().min(0),
+  traderSubaccountIndex: z.number().int().min(0),
+  collateralBalance: phoenixAmount,
+  unrealizedPnl: phoenixAmount,
+  unsettledFundingOwed: phoenixAmount,
+  portfolioValue: phoenixAmount,
+  maintenanceMargin: phoenixAmount,
+  riskState: z.string(),
+  riskTier: z.string(),
+  positions: z.array(
+    z.looseObject({
+      symbol: z.string(),
+      positionSize: phoenixAmount,
+      entryPrice: phoenixAmount,
+      positionValue: phoenixAmount,
+      unrealizedPnl: phoenixAmount,
+      liquidationPrice: phoenixAmount.nullish(),
+    }),
+  ),
+});
+
+const phoenixStateSchema = z.looseObject({
+  snapshot: z.looseObject({
+    subaccounts: z.array(
+      z.looseObject({
+        subaccountIndex: z.number().int().min(0),
+        spotCollaterals: z
+          .array(
+            z.looseObject({
+              symbol: z.string(),
+              balance: z.string(),
+              decimals: z.number().int().min(0).max(30),
+            }),
+          )
+          .nullish(),
+      }),
+    ),
+  }),
+});
+
+async function phoenixSpotCollateral(
+  wallet: string,
+  pdaIndex: number,
+  signal: AbortSignal,
+): Promise<Map<number, PerpAccount["spotCollateral"]>> {
+  const state = await fetchJSON(
+    `${PHOENIX_API}/v1/trader/state/${wallet}?traderPdaIndex=${pdaIndex}`,
+    {
+      vendor: "phoenix",
+      schema: phoenixStateSchema,
+      gate: phoenixGate,
+      signal,
+    },
+  );
+  const bySubaccount = new Map<number, PerpAccount["spotCollateral"]>();
+  for (const sub of state.snapshot.subaccounts) {
+    const held: PerpAccount["spotCollateral"] = [];
+    for (const spot of sub.spotCollaterals || []) {
+      const amount = Number(spot.balance) / 10 ** spot.decimals;
+      if (!Number.isFinite(amount)) {
+        throw new VendorError({
+          vendor: "phoenix",
+          kind: "shape",
+          path: "/v1/trader/state",
+          message: `phoenix spot collateral balance is not a number: ${spot.balance}`,
+        });
+      }
+      if (amount !== 0) held.push({ symbol: spot.symbol, amount });
+    }
+    bySubaccount.set(sub.subaccountIndex, held);
+  }
+  return bySubaccount;
+}
+
+async function phoenixPerps(
+  wallet: string,
+  signal: AbortSignal,
+): Promise<DefiPositionRow[]> {
+  const accounts = await rpc(
+    "getProgramAccounts",
+    [
+      PHOENIX,
+      {
+        encoding: "base64",
+        dataSlice: { offset: 0, length: 0 },
+        filters: [
+          { memcmp: { offset: PHOENIX_AUTHORITY_OFFSET, bytes: wallet } },
+          { memcmp: { offset: 0, bytes: PHOENIX_TRADER_DISCRIMINATOR } },
+        ],
+      },
+    ],
+    programAccountsSchema,
+    signal,
+  );
+  if (accounts.length === 0) return [];
+  const traders = await mapLimit(
+    accounts,
+    PHOENIX_CONCURRENCY,
+    async (acc) => ({
+      traderKey: acc.pubkey,
+      view: await fetchJSON(`${PHOENIX_API}/v1/view/trader/${acc.pubkey}`, {
+        vendor: "phoenix",
+        schema: phoenixTraderSchema,
+        gate: phoenixGate,
+        signal,
+      }),
+    }),
+  );
+  const pdaIndexes = [...new Set(traders.map((t) => t.view.traderPdaIndex))];
+  const spots = await mapLimit(pdaIndexes, PHOENIX_CONCURRENCY, (pdaIndex) =>
+    phoenixSpotCollateral(wallet, pdaIndex, signal),
+  );
+  const spotByPda = new Map(
+    pdaIndexes.map((pdaIndex, i) => [pdaIndex, spots[i]]),
+  );
+  const rows: DefiPositionRow[] = [];
+  for (const { traderKey, view } of traders) {
+    if (view.authority !== wallet) {
+      throw new VendorError({
+        vendor: "phoenix",
+        kind: "shape",
+        path: "/v1/view/trader",
+        message: `phoenix trader ${traderKey} reports a different authority`,
+      });
+    }
+    const spotCollateral = spotByPda
+      .get(view.traderPdaIndex)
+      ?.get(view.traderSubaccountIndex);
+    if (!spotCollateral) {
+      throw new VendorError({
+        vendor: "phoenix",
+        kind: "shape",
+        path: "/v1/trader/state",
+        message: `phoenix state omits subaccount ${view.traderSubaccountIndex} of trader ${traderKey}`,
+      });
+    }
+    if (view.riskState === PHOENIX_EMPTY && spotCollateral.length === 0) {
+      continue;
+    }
+    rows.push({
+      wallet,
+      protocol: "phoenix",
+      type: "perp-account",
+      mint: null,
+      symbol: null,
+      valueUsd: spotCollateral.length > 0 ? null : view.portfolioValue,
+      count: view.positions.length,
+      perp: {
+        traderKey,
+        pdaIndex: view.traderPdaIndex,
+        subaccountIndex: view.traderSubaccountIndex,
+        margin: view.traderSubaccountIndex === 0 ? "cross" : "isolated",
+        equityUsd: view.portfolioValue,
+        collateralUsd: view.collateralBalance,
+        spotCollateral,
+        unrealizedPnlUsd: view.unrealizedPnl,
+        unsettledFundingUsd: view.unsettledFundingOwed,
+        maintenanceMarginUsd: view.maintenanceMargin,
+        riskState: view.riskState,
+        riskTier: view.riskTier,
+        positions: view.positions.map((p) => ({
+          symbol: p.symbol,
+          size: p.positionSize,
+          entryPrice: p.entryPrice,
+          notionalUsd: Math.abs(p.positionValue),
+          unrealizedPnlUsd: p.unrealizedPnl,
+          liquidationPrice:
+            p.liquidationPrice == null || p.liquidationPrice < 0
+              ? null
+              : p.liquidationPrice,
+        })),
+      },
+    });
+  }
+  return rows;
+}
+
 const interactionsSchema = z.array(
   z.looseObject({
     instructions: z
@@ -428,12 +624,15 @@ async function unknownInteractions(
       counts.set(pid, (counts.get(pid) || 0) + 1);
     }
   }
-  return [...counts.entries()]
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return [
+    ...ranked.filter(([program]) => program !== PHOENIX).slice(0, 8),
+    ...ranked.filter(([program]) => program === PHOENIX),
+  ]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
     .map(([program, txCount]) => ({
       wallet,
-      protocol: "unknown",
+      protocol: program === PHOENIX ? "phoenix" : "unknown",
       type: "interaction",
       mint: null,
       symbol: null,
@@ -447,6 +646,7 @@ export type DefiScanSource =
   | "kamino-lend"
   | "owner-accounts"
   | "position-nfts"
+  | "phoenix"
   | "interactions";
 
 export type DefiScanFailure = { wallet: string; source: DefiScanSource };
@@ -478,6 +678,7 @@ async function scanWallet(wallet: string): Promise<WalletScan> {
     ["kamino-lend", () => whole(kaminoDeposits(wallet, signal))],
     ["owner-accounts", () => whole(ownerAccountPositions(wallet, signal))],
     ["position-nfts", () => nftPositions(wallet, signal)],
+    ["phoenix", () => whole(phoenixPerps(wallet, signal))],
     ["interactions", () => whole(unknownInteractions(wallet, signal))],
   ];
   const outcomes = await Promise.all(
@@ -502,6 +703,14 @@ async function scanWallet(wallet: string): Promise<WalletScan> {
   for (const outcome of outcomes) {
     if (outcome.rows) rows.push(...outcome.rows);
     if (outcome.degraded) failed.push({ wallet, source: outcome.source });
+  }
+  if (rows.some((r) => r.type === "perp-account" && r.protocol === "phoenix")) {
+    return {
+      rows: rows.filter(
+        (r) => !(r.type === "interaction" && r.programId === PHOENIX),
+      ),
+      failed,
+    };
   }
   return { rows, failed };
 }

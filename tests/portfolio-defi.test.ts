@@ -6,6 +6,9 @@ const MARGINFI = "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA";
 const WHIRLPOOL = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
 const NFT_A = "NftA11111111111111111111111111111111111111";
 const NFT_B = "NftB11111111111111111111111111111111111111";
+const PHOENIX = "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih";
+const PHOENIX_HOST = "perp-api.phoenix.trade";
+const PHOENIX_API = `https://${PHOENIX_HOST}`;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -53,6 +56,70 @@ const sliced = (pubkey: string) => ({
   pubkey,
   account: { data: ["", "base64"] },
 });
+
+const usd = (ui: number) => ({ value: Math.round(ui * 1e6), decimals: 6 });
+
+function traderView(
+  authority: string,
+  subaccountIndex: number,
+  over: Record<string, unknown> = {},
+) {
+  return {
+    traderKey: `trader${subaccountIndex}`,
+    authority,
+    traderPdaIndex: 0,
+    traderSubaccountIndex: subaccountIndex,
+    collateralBalance: usd(0),
+    unrealizedPnl: usd(0),
+    unsettledFundingOwed: usd(0),
+    portfolioValue: usd(0),
+    maintenanceMargin: usd(0),
+    riskState: "zeroCollateralNoPositions",
+    riskTier: "safe",
+    positions: [],
+    ...over,
+  };
+}
+
+function traderState(
+  subaccounts: Array<{ subaccountIndex: number; sol?: string }>,
+) {
+  return {
+    snapshot: {
+      subaccounts: subaccounts.map((s) => ({
+        subaccountIndex: s.subaccountIndex,
+        collateral: "0",
+        spotCollaterals: [
+          { symbol: "SOL", balance: s.sol ?? "0", decimals: 9 },
+        ],
+      })),
+    },
+  };
+}
+
+function phoenix(
+  w: string,
+  views: Record<string, unknown>,
+  state: unknown,
+): Handler {
+  return (url, rpc) => {
+    if (
+      rpc?.method === "getProgramAccounts" &&
+      programOf(rpc) === PHOENIX &&
+      memcmpBytes(rpc) === w
+    ) {
+      return json({ result: Object.keys(views).map(sliced) });
+    }
+    if (url.startsWith(`${PHOENIX_API}/v1/view/trader/`)) {
+      const view = views[url.split("/").pop() ?? ""];
+      return view instanceof Response ? view.clone() : json(view);
+    }
+    if (url.startsWith(`${PHOENIX_API}/v1/trader/state/${w}`)) {
+      return json(state);
+    }
+    return undefined;
+  };
+}
 
 const nftAccount = (mint: string) => ({
   account: {
@@ -266,6 +333,7 @@ describe("getDefiPositions", () => {
     expect(result.failed.map((f) => f.source).sort()).toEqual([
       "kamino-lend",
       "owner-accounts",
+      "phoenix",
     ]);
   });
 
@@ -311,6 +379,324 @@ describe("getDefiPositions", () => {
     expect(siblingSignals.length).toBeGreaterThan(0);
     expect(siblingSignals.every((sig) => sig.aborted)).toBe(true);
     releaseSibling();
+  });
+
+  it("values Phoenix cross and isolated accounts and skips empty ones", async () => {
+    const w = wallet();
+    install(
+      phoenix(
+        w,
+        {
+          trader0: traderView(w, 0, {
+            collateralBalance: usd(100),
+            unrealizedPnl: usd(-2.5),
+            unsettledFundingOwed: usd(0.25),
+            portfolioValue: usd(97.75),
+            maintenanceMargin: usd(4),
+            riskState: "healthy",
+            positions: [
+              {
+                symbol: "SOL",
+                positionSize: { value: -150, decimals: 2 },
+                entryPrice: usd(120),
+                positionValue: usd(-182.5),
+                unrealizedPnl: usd(-2.5),
+                liquidationPrice: { value: 180500, decimals: 3 },
+              },
+              {
+                symbol: "BTC",
+                positionSize: { value: "10", decimals: 4 },
+                entryPrice: usd(85220),
+                positionValue: usd(85.22),
+                unrealizedPnl: usd(0),
+                liquidationPrice: { value: -1, decimals: 0 },
+              },
+            ],
+          }),
+          trader1: traderView(w, 1),
+          trader2: traderView(w, 2, {
+            collateralBalance: usd(3),
+            portfolioValue: usd(3),
+            riskState: "healthy",
+          }),
+        },
+        traderState([
+          { subaccountIndex: 0 },
+          { subaccountIndex: 1 },
+          { subaccountIndex: 2 },
+        ]),
+      ),
+    );
+    const result = await getDefiPositions([w]);
+    expect(result.partial).toBe(false);
+    expect(result.hasUnvalued).toBe(false);
+    expect(result.positions).toEqual([
+      {
+        wallet: w,
+        protocol: "phoenix",
+        type: "perp-account",
+        mint: null,
+        symbol: null,
+        valueUsd: 97.75,
+        count: 2,
+        perp: {
+          traderKey: "trader0",
+          pdaIndex: 0,
+          subaccountIndex: 0,
+          margin: "cross",
+          equityUsd: 97.75,
+          collateralUsd: 100,
+          spotCollateral: [],
+          unrealizedPnlUsd: -2.5,
+          unsettledFundingUsd: 0.25,
+          maintenanceMarginUsd: 4,
+          riskState: "healthy",
+          riskTier: "safe",
+          positions: [
+            {
+              symbol: "SOL",
+              size: -1.5,
+              entryPrice: 120,
+              notionalUsd: 182.5,
+              unrealizedPnlUsd: -2.5,
+              liquidationPrice: 180.5,
+            },
+            {
+              symbol: "BTC",
+              size: 0.001,
+              entryPrice: 85220,
+              notionalUsd: 85.22,
+              unrealizedPnlUsd: 0,
+              liquidationPrice: null,
+            },
+          ],
+        },
+      },
+      expect.objectContaining({
+        valueUsd: 3,
+        count: 0,
+        perp: expect.objectContaining({
+          traderKey: "trader2",
+          subaccountIndex: 2,
+          margin: "isolated",
+        }),
+      }),
+    ]);
+  });
+
+  it("leaves a Phoenix account holding spot collateral unvalued", async () => {
+    const w = wallet();
+    install(
+      phoenix(
+        w,
+        {
+          trader0: traderView(w, 0, {
+            collateralBalance: usd(10),
+            portfolioValue: usd(90),
+            riskState: "healthy",
+          }),
+        },
+        traderState([{ subaccountIndex: 0, sol: "1500000000" }]),
+      ),
+    );
+    const result = await getDefiPositions([w]);
+    expect(result.hasUnvalued).toBe(true);
+    expect(result.positions).toEqual([
+      expect.objectContaining({
+        protocol: "phoenix",
+        valueUsd: null,
+        perp: expect.objectContaining({
+          equityUsd: 90,
+          spotCollateral: [{ symbol: "SOL", amount: 1.5 }],
+        }),
+      }),
+    ]);
+  });
+
+  it("degrades Phoenix when the state snapshot omits a discovered subaccount", async () => {
+    const w = wallet();
+    install(
+      phoenix(
+        w,
+        {
+          trader0: traderView(w, 0, {
+            collateralBalance: usd(5),
+            portfolioValue: usd(5),
+            riskState: "healthy",
+          }),
+          trader3: traderView(w, 3, {
+            collateralBalance: usd(1),
+            portfolioValue: usd(90),
+            riskState: "healthy",
+          }),
+        },
+        traderState([{ subaccountIndex: 0 }]),
+      ),
+    );
+    const result = await getDefiPositions([w]);
+    expect(result.failed).toEqual([{ wallet: w, source: "phoenix" }]);
+    expect(result.positions).toEqual([]);
+  });
+
+  it("reads the state of every Phoenix PDA index concurrently", async () => {
+    const w = wallet();
+    const base = phoenix(
+      w,
+      {
+        trader0: traderView(w, 0, {
+          collateralBalance: usd(5),
+          portfolioValue: usd(5),
+          riskState: "healthy",
+        }),
+        trader1: traderView(w, 0, {
+          traderPdaIndex: 1,
+          collateralBalance: usd(7),
+          portfolioValue: usd(7),
+          riskState: "healthy",
+        }),
+      },
+      traderState([{ subaccountIndex: 0 }]),
+    );
+    const pending: Array<() => void> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/v1/trader/state/")) {
+        await new Promise<void>((resolve) => pending.push(resolve));
+      }
+      const res = base(url, parseRpc(init));
+      if (res) return res;
+      if (url.startsWith("https://api.helius.xyz/")) return json([]);
+      return json({
+        result:
+          parseRpc(init)?.method === "getProgramAccounts" ? [] : { value: [] },
+      });
+    });
+    const p = getDefiPositions([w]);
+    await flush();
+    await flush();
+    expect(pending).toHaveLength(2);
+    for (const release of pending) release();
+    const result = await p;
+    expect(result.positions.map((r) => r.valueUsd)).toEqual([7, 5]);
+    expect(
+      fetchMock.mock.calls
+        .map((c) => String(c[0]))
+        .filter((u) => u.includes("/v1/trader/state/"))
+        .map((u) => new URL(u).searchParams.get("traderPdaIndex"))
+        .sort(),
+    ).toEqual(["0", "1"]);
+  });
+
+  it("keeps Phoenix interaction evidence only when no account is valued", async () => {
+    const txs = [
+      { instructions: [{ programId: PHOENIX }, { programId: PHOENIX }] },
+    ];
+    const idle = wallet();
+    install((url) =>
+      url.startsWith("https://api.helius.xyz/") ? json(txs) : undefined,
+    );
+    const without = await getDefiPositions([idle]);
+    expect(without.positions).toEqual([
+      {
+        wallet: idle,
+        protocol: "phoenix",
+        type: "interaction",
+        mint: null,
+        symbol: null,
+        valueUsd: null,
+        count: 2,
+        programId: PHOENIX,
+      },
+    ]);
+
+    const active = wallet();
+    const base = phoenix(
+      active,
+      {
+        trader0: traderView(active, 0, {
+          collateralBalance: usd(5),
+          portfolioValue: usd(5),
+          riskState: "healthy",
+        }),
+      },
+      traderState([{ subaccountIndex: 0 }]),
+    );
+    install((url, rpc) =>
+      url.startsWith("https://api.helius.xyz/") ? json(txs) : base(url, rpc),
+    );
+    const withAccount = await getDefiPositions([active]);
+    expect(withAccount.positions.map((r) => r.type)).toEqual(["perp-account"]);
+  });
+
+  it("does not let Phoenix take one of the eight interaction slots", async () => {
+    const others = Array.from({ length: 8 }, (_, i) => `Other${i}`);
+    const txs = [
+      {
+        instructions: [
+          { programId: PHOENIX },
+          { programId: PHOENIX },
+          ...others.map((programId) => ({ programId })),
+        ],
+      },
+    ];
+    const w = wallet();
+    const base = phoenix(
+      w,
+      {
+        trader0: traderView(w, 0, {
+          collateralBalance: usd(5),
+          portfolioValue: usd(5),
+          riskState: "healthy",
+        }),
+      },
+      traderState([{ subaccountIndex: 0 }]),
+    );
+    install((url, rpc) =>
+      url.startsWith("https://api.helius.xyz/") ? json(txs) : base(url, rpc),
+    );
+    const result = await getDefiPositions([w]);
+    expect(
+      result.positions
+        .filter((r) => r.type === "interaction")
+        .map((r) => r.programId)
+        .sort(),
+    ).toEqual(others);
+  });
+
+  it("makes no Phoenix API call for a wallet without trader accounts", async () => {
+    install(() => undefined);
+    await getDefiPositions([wallet()]);
+    expect(
+      fetchMock.mock.calls.some(
+        (c) => new URL(String(c[0])).host === PHOENIX_HOST,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["an unknown trader", () => json({ error: "Trader not found" }, 404)],
+    ["a server error", () => json({ error: "boom" }, 500)],
+    ["a view of the wrong shape", () => json({ authority: 1 })],
+  ])("degrades the whole Phoenix source on %s", async (_name, bad) => {
+    const w = wallet();
+    install(
+      phoenix(
+        w,
+        {
+          trader0: traderView(w, 0, {
+            collateralBalance: usd(5),
+            portfolioValue: usd(5),
+            riskState: "healthy",
+          }),
+          trader1: bad(),
+        },
+        traderState([{ subaccountIndex: 0 }, { subaccountIndex: 1 }]),
+      ),
+    );
+    const result = await settle(getDefiPositions([w]));
+    expect(result.partial).toBe(true);
+    expect(result.failed).toEqual([{ wallet: w, source: "phoenix" }]);
+    expect(result.positions).toEqual([]);
   });
 
   it("rethrows auth failures instead of degrading", async () => {

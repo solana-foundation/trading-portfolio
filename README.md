@@ -14,7 +14,7 @@ All aggregation endpoints are stateless: wallet list in, merged result out, noth
 | `POST /api/portfolio/holdings` | `{wallets[]}` | Per-wallet and merged-by-token balances with USD values |
 | `POST /api/portfolio/pnl` | `{wallets[]}` | Per-asset cost basis, average cost, unrealized PnL, per wallet and across the group |
 | `POST /api/portfolio/trades` | `{wallets[], limit?, cursor?, mint?}` | Priced trade history (swaps + external transfer-ins), stable-cursor paginated |
-| `POST /api/portfolio/defi` | `{wallets[]}` | Positions held inside DeFi programs (Kamino deposits, owner-account and position-NFT detections, unknown-program interactions); see `docs/defi-coverage.md` |
+| `POST /api/portfolio/defi` | `{wallets[]}` | Positions held inside DeFi programs (Kamino deposits, Phoenix perp accounts, owner-account and position-NFT detections, unknown-program interactions); see `docs/defi-coverage.md` |
 | `POST /api/portfolio/value-history` | `{wallets[]}` | Daily portfolio value series from Postgres: first request lazily backfills a wallet's full available history, later requests read the store, top up missing days, and compute today live. Per-wallet rows are write-once and shared; wallets untouched for 90 days are pruned. Requires `DATABASE_URL`; migrations in `db/migrations` (`db/apply.sh`) |
 
 The hosted deployment is private: Cloud Run requires an IAM-authorized identity (`roles/run.invoker`), and callers send a Google-signed ID token with the service URL as audience (`Authorization: Bearer $(gcloud auth print-identity-token)` for ad-hoc use; internal services impersonate the `portfolio-invoker-prd` service account). Self-hosting from this repo has no such gate — bring your own keys and add your own auth.
@@ -168,6 +168,22 @@ Request: `{"wallets": ["..."]}`
       "mint": "<mint>", "symbol": "USDC", "valueUsd": 1204.5, "count": 1 },
     { "wallet": "<wallet>", "protocol": "marginfi", "type": "position",
       "mint": null, "symbol": null, "valueUsd": null, "count": 2 },
+    { "wallet": "<wallet>", "protocol": "phoenix", "type": "perp-account",
+      "mint": null, "symbol": null,
+      "valueUsd": 97.75,            // account equity; null when the account holds spot collateral
+      "count": 1,                   // open positions
+      "perp": {
+        "traderKey": "<trader account>", "pdaIndex": 0, "subaccountIndex": 0,
+        "margin": "cross",          // subaccount 0 is cross, the rest are isolated
+        "equityUsd": 97.75, "collateralUsd": 100, "spotCollateral": [],
+        "unrealizedPnlUsd": -2.5, "unsettledFundingUsd": 0.25,
+        "maintenanceMarginUsd": 4, "riskState": "healthy", "riskTier": "safe",
+        "positions": [
+          { "symbol": "SOL", "size": -1.5,   // negative is short
+            "entryPrice": 120, "notionalUsd": 182.5,
+            "unrealizedPnlUsd": -2.5, "liquidationPrice": 180.5 }
+        ]
+      } },
     { "wallet": "<wallet>", "protocol": "unknown", "type": "interaction",
       "mint": null, "symbol": null, "valueUsd": null, "count": 14,
       "programId": "<program>" }
@@ -180,13 +196,26 @@ Request: `{"wallets": ["..."]}`
 }
 ```
 
-Each wallet is scanned by four independent sources: `kamino-lend`,
-`owner-accounts`, `position-nfts`, and `interactions`. A vendor failure
+Each wallet is scanned by five independent sources: `kamino-lend`,
+`owner-accounts`, `position-nfts`, `phoenix`, and `interactions`. A vendor failure
 on one source (after retries) does not fail the request: the source is
 listed in `failed`, `partial` is `true`, and the wallet is not cached so
 the next request retries it. Provider auth and configuration failures
 still return `502`. Row `type` is one of `deposit`, `position`,
-`interaction`, `unmatched-nft`, `unscanned-nft`.
+`perp-account`, `interaction`, `unmatched-nft`, `unscanned-nft`.
+
+Phoenix trader accounts are discovered on chain (one per margin
+subaccount) and valued by Phoenix's public API, one `perp-account` row
+each. `valueUsd` is the account's equity (collateral plus unrealised PnL
+and funding) as Phoenix reports it at its current mark price; position
+notional is detail, not value, so summing rows never double counts. An
+account holding spot collateral such as SOL reports `valueUsd: null`
+with the balances under `spotCollateral`, because Phoenix's equity
+figure counts that collateral at a margin haircut. If any trader account
+cannot be read, the whole `phoenix` source is listed in `failed` rather
+than returning some of the wallet's accounts. A wallet that has
+transacted with Phoenix but has no valued account keeps an `interaction`
+row with `protocol: "phoenix"`.
 
 ### `POST /api/portfolio/value-history`
 

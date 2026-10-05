@@ -95,12 +95,38 @@ export type TradePnLSummary = {
   unpricedCashflowCount: number;
 };
 
+export type PerpPosition = {
+  symbol: string;
+  size: number;
+  entryPrice: number;
+  notionalUsd: number;
+  unrealizedPnlUsd: number;
+  liquidationPrice: number | null;
+};
+
+export type PerpAccount = {
+  traderKey: SolanaAddress;
+  pdaIndex: number;
+  subaccountIndex: number;
+  margin: "cross" | "isolated";
+  equityUsd: number;
+  collateralUsd: number;
+  spotCollateral: Array<{ symbol: string; amount: number }>;
+  unrealizedPnlUsd: number;
+  unsettledFundingUsd: number;
+  maintenanceMarginUsd: number;
+  riskState: string;
+  riskTier: string;
+  positions: PerpPosition[];
+};
+
 export type DefiPositionRow = {
   wallet: SolanaAddress;
   protocol: string;
   type:
     | "deposit"
     | "position"
+    | "perp-account"
     | "interaction"
     | "unmatched-nft"
     | "unscanned-nft";
@@ -109,6 +135,7 @@ export type DefiPositionRow = {
   valueUsd: number | null;
   count: number;
   programId?: string;
+  perp?: PerpAccount;
 };
 
 export type MintCost = {
