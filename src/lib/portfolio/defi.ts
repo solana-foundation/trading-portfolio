@@ -624,9 +624,12 @@ async function unknownInteractions(
       counts.set(pid, (counts.get(pid) || 0) + 1);
     }
   }
-  return [...counts.entries()]
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return [
+    ...ranked.filter(([program]) => program !== PHOENIX).slice(0, 8),
+    ...ranked.filter(([program]) => program === PHOENIX),
+  ]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
     .map(([program, txCount]) => ({
       wallet,
       protocol: program === PHOENIX ? "phoenix" : "unknown",

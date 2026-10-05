@@ -628,6 +628,41 @@ describe("getDefiPositions", () => {
     expect(withAccount.positions.map((r) => r.type)).toEqual(["perp-account"]);
   });
 
+  it("does not let Phoenix take one of the eight interaction slots", async () => {
+    const others = Array.from({ length: 8 }, (_, i) => `Other${i}`);
+    const txs = [
+      {
+        instructions: [
+          { programId: PHOENIX },
+          { programId: PHOENIX },
+          ...others.map((programId) => ({ programId })),
+        ],
+      },
+    ];
+    const w = wallet();
+    const base = phoenix(
+      w,
+      {
+        trader0: traderView(w, 0, {
+          collateralBalance: usd(5),
+          portfolioValue: usd(5),
+          riskState: "healthy",
+        }),
+      },
+      traderState([{ subaccountIndex: 0 }]),
+    );
+    install((url, rpc) =>
+      url.startsWith("https://api.helius.xyz/") ? json(txs) : base(url, rpc),
+    );
+    const result = await getDefiPositions([w]);
+    expect(
+      result.positions
+        .filter((r) => r.type === "interaction")
+        .map((r) => r.programId)
+        .sort(),
+    ).toEqual(others);
+  });
+
   it("makes no Phoenix API call for a wallet without trader accounts", async () => {
     install(() => undefined);
     await getDefiPositions([wallet()]);
