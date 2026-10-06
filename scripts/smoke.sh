@@ -19,10 +19,15 @@ code=$(curl -sS -o /tmp/smoke_bad.json -w '%{http_code}' --max-time 30 \
 echo "bad-request probe: 400"
 
 for ep in summary holdings pnl trades; do
-  code=$(curl -sS -o "/tmp/smoke_$ep.json" -w '%{http_code}' --max-time 120 \
-    "${AUTH_ARGS[@]}" \
-    -X POST "$BASE_URL/api/portfolio/$ep" -H 'Content-Type: application/json' \
-    -d "{\"wallets\":[\"$WALLET\"]}")
+  for attempt in 1 2; do
+    code=$(curl -sS -o "/tmp/smoke_$ep.json" -w '%{http_code}' --max-time 120 \
+      "${AUTH_ARGS[@]}" \
+      -X POST "$BASE_URL/api/portfolio/$ep" -H 'Content-Type: application/json' \
+      -d "{\"wallets\":[\"$WALLET\"]}")
+    [ "$code" = "502" ] && [ "$attempt" = 1 ] || break
+    echo "$ep: 502, retrying once in 10s"
+    sleep 10
+  done
   case "$code" in
     2*)
       jq empty "/tmp/smoke_$ep.json" || fail "$ep returned non-JSON body"
