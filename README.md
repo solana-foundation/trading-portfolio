@@ -19,13 +19,32 @@ All aggregation endpoints are stateless: wallet list in, merged result out, noth
 
 The hosted deployment is private: Cloud Run requires an IAM-authorized identity (`roles/run.invoker`), and callers send a Google-signed ID token with the service URL as audience (`Authorization: Bearer $(gcloud auth print-identity-token)` for ad-hoc use; internal services impersonate the `portfolio-invoker-prd` service account). Self-hosting from this repo has no such gate — bring your own keys and add your own auth.
 
+### Gateway path (optional)
+
+An API gateway in front of the service can authenticate callers, apply their rate limits, and forward a signed identity in the `X-SF-Identity` header (an ES256 JWT with a `kid` header, 60 s lifetime). The gateway path is off unless both `SF_GATEWAY_ISSUER` and `SF_GATEWAY_AUDIENCE` are set; while it is off, `X-SF-Identity` is ignored.
+
+| Env var | Meaning |
+|---|---|
+| `SF_GATEWAY_ISSUER` | Exact `iss` the identity must carry |
+| `SF_GATEWAY_AUDIENCE` | Exact `aud` (or one entry of an `aud` list) the identity must carry |
+| `SF_GATEWAY_JWKS_URL` | Optional; defaults to `<issuer>/.well-known/jwks.json` |
+
+When it is on:
+
+- A request without `X-SF-Identity` takes the direct path, unchanged, including the per-instance rate limit.
+- A valid identity skips the per-instance rate limit, because the gateway already limited the caller. Input validation, request budgets and vendor concurrency caps still apply, and so does Cloud Run IAM (the gateway sends its own ID token in `X-Serverless-Authorization`).
+- An invalid identity (bad signature, unknown `kid`, wrong `alg`, `iss` or `aud`, expired beyond a 10 s leeway, malformed) gets `401`. It never falls back to the direct path.
+- An anonymous identity (`"anonymous": true`) gets `403`: this API is not public.
+- Any project or user is served; nothing about the caller is stored or logged.
+- Signing keys are cached by `kid`. An unknown `kid` refetches the key set at most once per 30 s, and the set is refreshed every 10 minutes. If the key set cannot be fetched and no key is cached, the response is `503`.
+
 ## API reference
 
 Common to every endpoint:
 
 - `POST` with `Content-Type: application/json`.
 - Body always includes `wallets`: array of 1–20 base58 Solana addresses; duplicates are deduplicated. Extra unknown fields are rejected where noted.
-- Errors: `400 {"error": string}` for invalid input, `429 {"error": string}` when the per-instance rate limit (30 requests/min) is exceeded — back off and retry shortly, `502 {"error": string}` when an upstream data provider fails (transient upstream failures — 429, 5xx, network, timeout — are retried with jittered backoff before a 502 is returned; responses are never partial-as-complete — retry), `503` from `value-history` when no store is configured.
+- Errors: `400 {"error": string}` for invalid input, `401`/`403`/`503 {"error": string}` on the gateway path (see above), `429 {"error": string}` when the per-instance rate limit (30 requests/min) is exceeded — back off and retry shortly, `502 {"error": string}` when an upstream data provider fails (transient upstream failures — 429, 5xx, network, timeout — are retried with jittered backoff before a 502 is returned; responses are never partial-as-complete — retry), `503` from `value-history` when no store is configured.
 - Numbers are plain JSON numbers in USD unless stated; timestamps `ts` are unix seconds; `day` is `YYYY-MM-DD` (UTC).
 - Degradation is always surfaced, never guessed: watch `hasUnpriced`, `historyTruncated`, `partial`, `hasUnpricedDays`, and `failed` on `/defi`.
 

@@ -1,5 +1,5 @@
 import { DeadlineError } from "@/lib/portfolio/deadline";
-export type Vendor = "birdeye" | "helius" | "phoenix" | "triton";
+export type Vendor = "birdeye" | "gateway" | "helius" | "phoenix" | "triton";
 
 export type VendorErrorKind =
   | "http"

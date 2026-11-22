@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { checkGatewayIdentity } from "@/lib/portfolio/gateway-identity";
 
 export const MAX_WALLETS_PER_REQUEST = 20;
 
@@ -38,9 +39,13 @@ export async function parseWalletsBody(
   extra?: z.ZodRawShape,
 ): Promise<
   | { ok: true; wallets: string[]; body: Record<string, unknown> }
-  | { ok: false; error: string; status: 400 | 429 }
+  | { ok: false; error: string; status: 400 | 401 | 403 | 429 | 503 }
 > {
-  if (!takeRequestToken()) {
+  const gateway = await checkGatewayIdentity(request);
+  if (gateway.path === "rejected") {
+    return { ok: false, error: gateway.error, status: gateway.status };
+  }
+  if (gateway.path === "legacy" && !takeRequestToken()) {
     return {
       ok: false,
       error: "Rate limit exceeded, retry shortly.",
