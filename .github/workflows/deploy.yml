@@ -177,8 +177,10 @@ jobs:
           set -euo pipefail
           GATEWAY_SET=()
           GATEWAY_REMOVE=()
+          GATEWAY_ENV=$(doppler secrets download --no-file --format json --project trading-portfolio --config prd \
+            | jq -c '{SF_GATEWAY_ISSUER, SF_GATEWAY_AUDIENCE, SF_GATEWAY_JWKS_URL}')
           for key in SF_GATEWAY_ISSUER SF_GATEWAY_AUDIENCE SF_GATEWAY_JWKS_URL; do
-            value=$(doppler secrets get "$key" --plain --project trading-portfolio --config prd 2>/dev/null || true)
+            value=$(jq -r --arg k "$key" '.[$k] // ""' <<<"$GATEWAY_ENV")
             if [ -n "$value" ]; then
               GATEWAY_SET+=("$key=$value")
             else
