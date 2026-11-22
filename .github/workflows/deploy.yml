@@ -175,11 +175,30 @@ jobs:
           SECRET_REFS: ${{ steps.secret_refs.outputs.refs }}
         run: |
           set -euo pipefail
+          GATEWAY_SET=()
+          GATEWAY_REMOVE=()
+          for key in SF_GATEWAY_ISSUER SF_GATEWAY_AUDIENCE SF_GATEWAY_JWKS_URL; do
+            value=$(doppler secrets get "$key" --plain --project trading-portfolio --config prd 2>/dev/null || true)
+            if [ -n "$value" ]; then
+              GATEWAY_SET+=("$key=$value")
+            else
+              GATEWAY_REMOVE+=("$key")
+            fi
+          done
+          GATEWAY_FLAGS=()
+          if [ ${#GATEWAY_SET[@]} -gt 0 ]; then
+            GATEWAY_FLAGS+=("--update-env-vars=$(IFS=,; echo "${GATEWAY_SET[*]}")")
+          fi
+          if [ ${#GATEWAY_REMOVE[@]} -gt 0 ]; then
+            GATEWAY_FLAGS+=("--remove-env-vars=$(IFS=,; echo "${GATEWAY_REMOVE[*]}")")
+          fi
+          echo "gateway path env: set [${GATEWAY_SET[*]:-}] removed [${GATEWAY_REMOVE[*]:-}]"
           gcloud run deploy ${{ env.SERVICE }} \
             --image="$IMAGE" \
             --region=${{ env.GCP_REGION }} \
             --project=${{ vars.GCP_PROJECT }} \
             --set-secrets="$SECRET_REFS" \
+            "${GATEWAY_FLAGS[@]}" \
             --quiet
 
       - name: Prod smoke gate

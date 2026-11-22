@@ -86,10 +86,10 @@ resource "google_service_account" "invoker" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "invokers" {
-  for_each = {
+  for_each = merge(var.gateway_invokers, {
     internal = google_service_account.invoker.email
     deployer = google_service_account.cloudrun_deployer.email
-  }
+  })
 
   project  = var.project_id
   location = var.region

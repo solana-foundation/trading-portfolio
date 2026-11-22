@@ -4,6 +4,8 @@
 
 **Infrastructure ordering** — apply `terraform/envs/prd` before pushing a deploy that depends on it. The deploy workflow's migration job attaches VPC settings only once the terraform-created subnet exists; deploying network-dependent changes before the apply blocks the release at the migration step. After an apply, verify with a deploy (or workflow re-run) and confirm the smoke gate passes.
 
+**Gateway path** — on only when Doppler `trading-portfolio/prd` has non-empty `SF_GATEWAY_ISSUER` and `SF_GATEWAY_AUDIENCE` (`SF_GATEWAY_JWKS_URL` is optional). Each deploy sets the non-empty values on the service and removes the empty ones; terraform ignores container env. To turn it on: apply `terraform/envs/prd` so the gateway service account in `gateway_invokers` holds `roles/run.invoker`, set the values, and re-run `Portfolio Deploy`. To turn it off: empty the values and re-run `Portfolio Deploy`; requests that carry `X-SF-Identity` then take the direct path again. Direct callers (canary, smoke gate) are unaffected either way.
+
 **Service** — route traffic back to a previous Cloud Run revision (no rebuild):
 
 ```

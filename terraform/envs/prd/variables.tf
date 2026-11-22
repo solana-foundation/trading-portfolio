@@ -21,3 +21,11 @@ variable "github_repo" {
   description = "GitHub repo allowed to assume the deployer via WIF."
   default     = "solana-foundation/trading-portfolio"
 }
+
+variable "gateway_invokers" {
+  type        = map(string)
+  description = "API gateway service accounts allowed to invoke the service, keyed by a stable name. Each one forwards a signed X-SF-Identity that the app verifies when the gateway path is on."
+  default = {
+    gateway_stg = "sf-gw-stg-gateway@gateway-stg.iam.gserviceaccount.com"
+  }
+}
